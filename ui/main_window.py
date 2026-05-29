@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QAction, QKeySequence, QPixmap
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QStatusBar,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core.image_index import ImageIndex
+from core.split_store import SplitStore
+
+
+class ZoomableGraphicsView(QGraphicsView):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self._zoom = 1.0
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+        self._zoom *= factor
+        self.scale(factor, factor)
+
+    def reset_zoom(self) -> None:
+        self.resetTransform()
+        self._zoom = 1.0
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Soldering Split Viewer")
+        self.resize(1400, 900)
+
+        self.split_dir = Path(r"E:\Desktop\solderingData\split_files")
+        self.store = SplitStore(self.split_dir)
+        self.indexer = ImageIndex()
+
+        self.current_split = "train"
+        self.filtered_paths: list[str] = []
+
+        self._build_ui()
+        self.reload_data()
+
+    def _build_ui(self) -> None:
+        root = QWidget(self)
+        main_layout = QVBoxLayout(root)
+
+        top_bar = QHBoxLayout()
+        self.path_label = QLabel("当前路径: -")
+        self.meta_label = QLabel("集合: - | 索引: -")
+        top_bar.addWidget(self.path_label, 1)
+        top_bar.addWidget(self.meta_label, 0)
+        main_layout.addLayout(top_bar)
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("按文件名搜索...")
+        self.search_edit.textChanged.connect(self.refresh_list)
+        left_layout.addWidget(self.search_edit)
+
+        split_switch = QHBoxLayout()
+        self.btn_show_train = QPushButton("Train")
+        self.btn_show_val = QPushButton("Val")
+        self.btn_show_train.clicked.connect(lambda: self.switch_split("train"))
+        self.btn_show_val.clicked.connect(lambda: self.switch_split("val"))
+        split_switch.addWidget(self.btn_show_train)
+        split_switch.addWidget(self.btn_show_val)
+        left_layout.addLayout(split_switch)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_widget.currentItemChanged.connect(self.on_selection_changed)
+        left_layout.addWidget(self.list_widget, 1)
+
+        move_bar = QHBoxLayout()
+        self.move_to_train_btn = QPushButton("移动到 Train")
+        self.move_to_val_btn = QPushButton("移动到 Val")
+        self.move_to_train_btn.clicked.connect(lambda: self.move_selected("train"))
+        self.move_to_val_btn.clicked.connect(lambda: self.move_selected("val"))
+        move_bar.addWidget(self.move_to_train_btn)
+        move_bar.addWidget(self.move_to_val_btn)
+        left_layout.addLayout(move_bar)
+
+        nav_bar = QHBoxLayout()
+        self.prev_btn = QPushButton("上一张")
+        self.next_btn = QPushButton("下一张")
+        self.prev_btn.clicked.connect(self.select_prev)
+        self.next_btn.clicked.connect(self.select_next)
+        nav_bar.addWidget(self.prev_btn)
+        nav_bar.addWidget(self.next_btn)
+        left_layout.addLayout(nav_bar)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+
+        self.scene = QGraphicsScene(self)
+        self.view = ZoomableGraphicsView(self)
+        self.view.setScene(self.scene)
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
+        right_layout.addWidget(self.view, 1)
+
+        zoom_bar = QHBoxLayout()
+        self.fit_btn = QPushButton("适配窗口")
+        self.one_to_one_btn = QPushButton("1:1")
+        self.open_split_dir_btn = QPushButton("选择 split_files")
+        self.fit_btn.clicked.connect(self.fit_image)
+        self.one_to_one_btn.clicked.connect(self.reset_zoom)
+        self.open_split_dir_btn.clicked.connect(self.choose_split_dir)
+        zoom_bar.addWidget(self.fit_btn)
+        zoom_bar.addWidget(self.one_to_one_btn)
+        zoom_bar.addWidget(self.open_split_dir_btn)
+        right_layout.addLayout(zoom_bar)
+
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([420, 980])
+
+        main_layout.addWidget(splitter, 1)
+
+        self.setCentralWidget(root)
+
+        toolbar = QToolBar("Main", self)
+        toolbar.setIconSize(QSize(16, 16))
+        self.addToolBar(toolbar)
+
+        save_action = QAction("保存", self)
+        save_action.setShortcut(QKeySequence.Save)
+        save_action.triggered.connect(self.save_data)
+        toolbar.addAction(save_action)
+
+        reload_action = QAction("重新加载", self)
+        reload_action.setShortcut(QKeySequence.Refresh)
+        reload_action.triggered.connect(self.reload_data)
+        toolbar.addAction(reload_action)
+
+        self.setStatusBar(QStatusBar(self))
+
+    def switch_split(self, split_name: str) -> None:
+        self.current_split = split_name
+        self.refresh_list()
+
+    def _current_paths(self) -> list[str]:
+        return self.store.data.train if self.current_split == "train" else self.store.data.val
+
+    def refresh_list(self) -> None:
+        current_text = self.search_edit.text().strip().lower()
+        self.list_widget.clear()
+
+        paths = self._current_paths()
+        self.filtered_paths = []
+
+        for p in paths:
+            name = Path(p).name.lower()
+            if current_text and current_text not in name:
+                continue
+
+            self.filtered_paths.append(p)
+            item = QListWidgetItem(Path(p).name)
+            item.setData(Qt.UserRole, p)
+            if not Path(p).exists():
+                item.setForeground(Qt.red)
+                item.setToolTip("文件不存在")
+            item.setToolTip(p)
+            self.list_widget.addItem(item)
+
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+        else:
+            self.path_label.setText("当前路径: -")
+            self.meta_label.setText(f"集合: {self.current_split} | 索引: 0/0")
+            self.show_placeholder("无可显示图片")
+
+    def on_selection_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+        if current is None:
+            return
+
+        path = current.data(Qt.UserRole)
+        index = self.list_widget.currentRow() + 1
+        total = self.list_widget.count()
+        self.path_label.setText(f"当前路径: {path}")
+        self.meta_label.setText(f"集合: {self.current_split} | 索引: {index}/{total}")
+        self.load_image(path)
+
+    def load_image(self, path: str) -> None:
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            self.show_placeholder("图片加载失败或格式不支持")
+            return
+
+        self.scene.clear()
+        self.pixmap_item = QGraphicsPixmapItem(pixmap)
+        self.scene.addItem(self.pixmap_item)
+        self.scene.setSceneRect(self.pixmap_item.boundingRect())
+        self.fit_image()
+
+    def show_placeholder(self, text: str) -> None:
+        self.scene.clear()
+        placeholder = self.scene.addText(text)
+        placeholder.setDefaultTextColor(Qt.gray)
+        self.scene.setSceneRect(placeholder.boundingRect())
+        self.view.reset_zoom()
+
+    def fit_image(self) -> None:
+        self.view.reset_zoom()
+        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def reset_zoom(self) -> None:
+        self.view.reset_zoom()
+
+    def _selected_path(self) -> str | None:
+        item = self.list_widget.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+    def move_selected(self, target: str) -> None:
+        path = self._selected_path()
+        if not path:
+            QMessageBox.information(self, "提示", "请先选择一张图片")
+            return
+
+        self.store.move(path, target)
+
+        if target != self.current_split:
+            self.refresh_list()
+        else:
+            self.refresh_list()
+            self._select_path(path)
+
+        self.statusBar().showMessage(f"已移动到 {target}: {Path(path).name}", 3000)
+
+    def _select_path(self, path: str) -> None:
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.data(Qt.UserRole) == path:
+                self.list_widget.setCurrentRow(i)
+                return
+
+    def select_prev(self) -> None:
+        row = self.list_widget.currentRow()
+        if row > 0:
+            self.list_widget.setCurrentRow(row - 1)
+
+    def select_next(self) -> None:
+        row = self.list_widget.currentRow()
+        if row < self.list_widget.count() - 1:
+            self.list_widget.setCurrentRow(row + 1)
+
+    def save_data(self) -> None:
+        try:
+            self.store.save()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "保存失败", str(exc))
+            return
+        self.statusBar().showMessage("保存成功", 3000)
+
+    def reload_data(self) -> None:
+        try:
+            self.store.load()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "加载失败", str(exc))
+            return
+
+        self.switch_split(self.current_split)
+        train_count = len(self.store.data.train)
+        val_count = len(self.store.data.val)
+        self.statusBar().showMessage(f"加载完成: train={train_count}, val={val_count}", 4000)
+
+    def choose_split_dir(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择 split_files 目录", str(self.split_dir))
+        if not folder:
+            return
+
+        self.split_dir = Path(folder)
+        self.store = SplitStore(self.split_dir)
+        self.reload_data()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if not self.store.dirty:
+            event.accept()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "未保存更改",
+            "当前有未保存修改，是否保存后退出？",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self.save_data()
+            if self.store.dirty:
+                event.ignore()
+            else:
+                event.accept()
+        elif reply == QMessageBox.No:
+            event.accept()
+        else:
+            event.ignore()
