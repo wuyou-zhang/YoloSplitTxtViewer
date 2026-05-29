@@ -6,10 +6,12 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDoubleSpinBox,
     QFileDialog,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,12 +22,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStatusBar,
+    QTextEdit,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
 from core.image_index import ImageIndex
+from core.split_runner import split_dataset
 from core.split_store import SplitStore
 
 
@@ -58,6 +62,8 @@ class MainWindow(QMainWindow):
 
         self.current_split = "train"
         self.filtered_paths: list[str] = []
+        self.data_root = Path(r"E:\Desktop\solderingData")
+        self.names_path = self.data_root / "solderingHbbclass.txt"
 
         self._build_ui()
         self.reload_data()
@@ -115,6 +121,63 @@ class MainWindow(QMainWindow):
         nav_bar.addWidget(self.next_btn)
         left_layout.addLayout(nav_bar)
 
+        split_group = QGroupBox("数据划分")
+        split_group_layout = QVBoxLayout(split_group)
+        self.split_group = split_group
+
+        data_root_row = QHBoxLayout()
+        self.data_root_edit = QLineEdit(str(self.data_root))
+        self.pick_data_root_btn = QPushButton("数据根目录")
+        self.pick_data_root_btn.clicked.connect(self.choose_data_root)
+        data_root_row.addWidget(self.data_root_edit, 1)
+        data_root_row.addWidget(self.pick_data_root_btn)
+        split_group_layout.addLayout(data_root_row)
+
+        names_row = QHBoxLayout()
+        self.names_edit = QLineEdit(str(self.names_path))
+        self.pick_names_btn = QPushButton("类别文件")
+        self.pick_names_btn.clicked.connect(self.choose_names_file)
+        names_row.addWidget(self.names_edit, 1)
+        names_row.addWidget(self.pick_names_btn)
+        split_group_layout.addLayout(names_row)
+
+        ratio_row = QHBoxLayout()
+        self.train_ratio = QDoubleSpinBox()
+        self.val_ratio = QDoubleSpinBox()
+        self.test_ratio = QDoubleSpinBox()
+        for spin, value in ((self.train_ratio, 0.9), (self.val_ratio, 0.1), (self.test_ratio, 0.0)):
+            spin.setRange(0.0, 1.0)
+            spin.setSingleStep(0.05)
+            spin.setDecimals(2)
+            spin.setValue(value)
+        ratio_row.addWidget(QLabel("Train"))
+        ratio_row.addWidget(self.train_ratio)
+        ratio_row.addWidget(QLabel("Val"))
+        ratio_row.addWidget(self.val_ratio)
+        ratio_row.addWidget(QLabel("Test"))
+        ratio_row.addWidget(self.test_ratio)
+        split_group_layout.addLayout(ratio_row)
+
+        split_action_row = QHBoxLayout()
+        self.run_split_btn = QPushButton("执行划分")
+        self.run_split_btn.clicked.connect(self.run_split)
+        split_action_row.addWidget(self.run_split_btn)
+        split_group_layout.addLayout(split_action_row)
+
+        self.split_log = QTextEdit()
+        self.split_log.setReadOnly(True)
+        self.split_log.setPlaceholderText("划分日志输出...")
+        self.split_log.setMaximumHeight(150)
+        split_group_layout.addWidget(self.split_log)
+
+        left_layout.addWidget(split_group)
+
+        split_toggle_row = QHBoxLayout()
+        self.toggle_split_panel_btn = QPushButton("隐藏数据划分")
+        self.toggle_split_panel_btn.clicked.connect(self.toggle_split_panel)
+        split_toggle_row.addWidget(self.toggle_split_panel_btn)
+        left_layout.addLayout(split_toggle_row)
+
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
 
@@ -160,6 +223,61 @@ class MainWindow(QMainWindow):
         toolbar.addAction(reload_action)
 
         self.setStatusBar(QStatusBar(self))
+
+    def choose_data_root(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择数据根目录", self.data_root_edit.text().strip())
+        if folder:
+            self.data_root_edit.setText(folder)
+
+    def choose_names_file(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择类别文件",
+            str(Path(self.names_edit.text()).parent if self.names_edit.text().strip() else self.data_root),
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if file_path:
+            self.names_edit.setText(file_path)
+
+    def toggle_split_panel(self) -> None:
+        visible = self.split_group.isVisible()
+        self.split_group.setVisible(not visible)
+        self.toggle_split_panel_btn.setText("显示数据划分" if visible else "隐藏数据划分")
+
+    def run_split(self) -> None:
+        train = self.train_ratio.value()
+        val = self.val_ratio.value()
+        test = self.test_ratio.value()
+        if train + val + test <= 0:
+            QMessageBox.warning(self, "参数错误", "Train/Val/Test 比例和必须大于 0")
+            return
+
+        data_root = self.data_root_edit.text().strip()
+        names_file = self.names_edit.text().strip()
+        if not data_root:
+            QMessageBox.warning(self, "参数错误", "请设置数据根目录")
+            return
+
+        try:
+            result = split_dataset(data_root, names_file, (train, val, test))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "划分失败", str(exc))
+            self.split_log.append(f"[ERROR] {exc}")
+            return
+
+        self.split_log.append(
+            f"[OK] Train={result.train_count}, Val={result.val_count}, Test={result.test_count}, "
+            f"MissingLabel={result.missing_labels}"
+        )
+        self.split_log.append(f"[OK] train.txt: {result.train_path}")
+        self.split_log.append(f"[OK] val.txt:   {result.val_path}")
+        self.split_log.append(f"[OK] test.txt:  {result.test_path}")
+        self.split_log.append(f"[OK] data.yaml: {result.yaml_path}")
+
+        self.split_dir = Path(data_root) / "split_files"
+        self.store = SplitStore(self.split_dir)
+        self.reload_data()
+        self.statusBar().showMessage("划分完成并已刷新列表", 4000)
 
     def switch_split(self, split_name: str) -> None:
         self.current_split = split_name
