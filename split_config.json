@@ -1,0 +1,9 @@
+{
+  "data_root": "E:\\Desktop\\solderingData",
+  "names_path": "E:\\Desktop\\solderingData\\solderingHbbclass.txt",
+  "train_ratio": 0.9,
+  "val_ratio": 0.1,
+  "test_ratio": 0.0,
+  "seed_enabled": true,
+  "seed_value": 44
+}

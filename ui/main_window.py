@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
     QGraphicsPixmapItem,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QTextEdit,
@@ -51,6 +54,8 @@ class ZoomableGraphicsView(QGraphicsView):
 
 
 class MainWindow(QMainWindow):
+    CONFIG_PATH = Path(__file__).parent.parent / "split_config.json"
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Soldering Split Viewer")
@@ -65,7 +70,15 @@ class MainWindow(QMainWindow):
         self.data_root = Path(r"E:\Desktop\solderingData")
         self.names_path = self.data_root / "solderingHbbclass.txt"
 
+        self._seed_enabled = False
+        self._seed_value = 42
+        self._train_ratio = 0.9
+        self._val_ratio = 0.1
+        self._test_ratio = 0.0
+        self._load_config()
+
         self._build_ui()
+        self._connect_config_autosave()
         self.reload_data()
 
     def _build_ui(self) -> None:
@@ -165,7 +178,7 @@ class MainWindow(QMainWindow):
         self.train_ratio = QDoubleSpinBox()
         self.val_ratio = QDoubleSpinBox()
         self.test_ratio = QDoubleSpinBox()
-        for spin, value in ((self.train_ratio, 0.9), (self.val_ratio, 0.1), (self.test_ratio, 0.0)):
+        for spin, value in ((self.train_ratio, self._train_ratio), (self.val_ratio, self._val_ratio), (self.test_ratio, self._test_ratio)):
             spin.setRange(0.0, 1.0)
             spin.setSingleStep(0.05)
             spin.setDecimals(2)
@@ -177,6 +190,19 @@ class MainWindow(QMainWindow):
         ratio_row.addWidget(QLabel("Test"))
         ratio_row.addWidget(self.test_ratio)
         split_group_layout.addLayout(ratio_row)
+
+        seed_row = QHBoxLayout()
+        self.seed_checkbox = QCheckBox("固定随机种子")
+        self.seed_checkbox.setChecked(self._seed_enabled)
+        self.seed_spinbox = QSpinBox()
+        self.seed_spinbox.setRange(0, 999999)
+        self.seed_spinbox.setValue(self._seed_value)
+        self.seed_spinbox.setEnabled(self._seed_enabled)
+        self.seed_checkbox.toggled.connect(self.seed_spinbox.setEnabled)
+        seed_row.addWidget(self.seed_checkbox)
+        seed_row.addWidget(self.seed_spinbox)
+        seed_row.addStretch()
+        split_group_layout.addLayout(seed_row)
 
         split_action_row = QHBoxLayout()
         self.run_split_btn = QPushButton("执行划分")
@@ -249,6 +275,47 @@ class MainWindow(QMainWindow):
         self.images_path_label.setText(str(root / "Images"))
         self.labels_path_label.setText(str(root / "labels"))
 
+    # ------------------------------------------------------------------
+    # config persistence
+    # ------------------------------------------------------------------
+    def _load_config(self) -> None:
+        try:
+            if self.CONFIG_PATH.exists():
+                data = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.data_root = Path(data.get("data_root", str(self.data_root)))
+                self.names_path = Path(data.get("names_path", str(self.names_path)))
+                self._train_ratio = float(data.get("train_ratio", 0.9))
+                self._val_ratio = float(data.get("val_ratio", 0.1))
+                self._test_ratio = float(data.get("test_ratio", 0.0))
+                self._seed_enabled = bool(data.get("seed_enabled", False))
+                self._seed_value = int(data.get("seed_value", 42))
+        except Exception:
+            pass  # corrupted config → keep defaults
+
+    def _save_config(self) -> None:
+        data = {
+            "data_root": self.data_root_edit.text().strip(),
+            "names_path": self.names_edit.text().strip(),
+            "train_ratio": self.train_ratio.value(),
+            "val_ratio": self.val_ratio.value(),
+            "test_ratio": self.test_ratio.value(),
+            "seed_enabled": self.seed_checkbox.isChecked(),
+            "seed_value": self.seed_spinbox.value(),
+        }
+        self.CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _connect_config_autosave(self) -> None:
+        self.data_root_edit.textChanged.connect(lambda _: self._save_config())
+        self.names_edit.textChanged.connect(lambda _: self._save_config())
+        self.train_ratio.valueChanged.connect(lambda _: self._save_config())
+        self.val_ratio.valueChanged.connect(lambda _: self._save_config())
+        self.test_ratio.valueChanged.connect(lambda _: self._save_config())
+        self.seed_checkbox.toggled.connect(lambda _: self._save_config())
+        self.seed_spinbox.valueChanged.connect(lambda _: self._save_config())
+
+    # ------------------------------------------------------------------
+    # actions
+    # ------------------------------------------------------------------
     def choose_data_root(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择数据根目录", self.data_root_edit.text().strip())
         if folder:
@@ -283,16 +350,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "参数错误", "请设置数据根目录")
             return
 
+        seed = self.seed_spinbox.value() if self.seed_checkbox.isChecked() else None
         try:
-            result = split_dataset(data_root, names_file, (train, val, test))
+            result = split_dataset(data_root, names_file, (train, val, test), seed=seed)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "划分失败", str(exc))
             self.split_log.append(f"[ERROR] {exc}")
             return
 
+        seed_str = f"seed={seed}" if seed is not None else "seed=random"
         self.split_log.append(
             f"[OK] Train={result.train_count}, Val={result.val_count}, Test={result.test_count}, "
-            f"MissingLabel={result.missing_labels}"
+            f"MissingLabel={result.missing_labels}, {seed_str}"
         )
         self.split_log.append(f"[OK] train.txt: {result.train_path}")
         self.split_log.append(f"[OK] val.txt:   {result.val_path}")

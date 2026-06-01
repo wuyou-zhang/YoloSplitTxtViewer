@@ -24,6 +24,7 @@ def split_dataset(
     names_path: str | Path,
     split_ratio: tuple[float, float, float] = (0.8, 0.1, 0.1),
     extensions: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tiff"),
+    seed: int | None = None,
 ) -> SplitResult:
     root_path = Path(data_root).resolve()
     images_dir = root_path / "images"
@@ -38,6 +39,15 @@ def split_dataset(
     for ext in extensions:
         images.extend(list(images_dir.rglob(f"*{ext}")))
         images.extend(list(images_dir.rglob(f"*{ext.upper()}")))
+    # 去重：Windows 大小写不敏感，同一文件可能被 *.jpg 和 *.JPG 各匹配一次
+    seen: set[str] = set()
+    unique_images: list[Path] = []
+    for p in images:
+        key = str(p.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique_images.append(p)
+    images = unique_images
 
     if not images:
         raise ValueError("未找到任何图片，请检查路径或后缀名。")
@@ -55,6 +65,8 @@ def split_dataset(
     if not valid_images:
         raise ValueError("所有图片都缺失对应标签，无法划分。")
 
+    if seed is not None:
+        random.seed(seed)
     random.shuffle(valid_images)
     total = len(valid_images)
 

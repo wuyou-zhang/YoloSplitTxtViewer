@@ -46,26 +46,9 @@ class SplitStore:
             train=self._load_file(self.train_file),
             val=self._load_file(self.val_file),
         )
-        self._enforce_cross_unique()
         self.dirty = False
         return self.data
 
-    def _enforce_cross_unique(self) -> None:
-        seen: set[str] = set()
-        unique_train: list[str] = []
-        for p in self.data.train:
-            if p not in seen:
-                seen.add(p)
-                unique_train.append(p)
-
-        unique_val: list[str] = []
-        for p in self.data.val:
-            if p not in seen:
-                seen.add(p)
-                unique_val.append(p)
-
-        self.data.train = unique_train
-        self.data.val = unique_val
 
     def move(self, path: str, target: str) -> None:
         src_list = self.data.train if path in self.data.train else self.data.val if path in self.data.val else None
@@ -86,7 +69,6 @@ class SplitStore:
         if path not in dst_list:
             dst_list.append(path)
 
-        self._enforce_cross_unique()
         self.dirty = True
 
     @staticmethod
