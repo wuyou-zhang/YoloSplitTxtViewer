@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -94,6 +94,18 @@ class MainWindow(QMainWindow):
         self.btn_show_val = QPushButton("Val")
         self.btn_show_train.clicked.connect(lambda: self.switch_split("train"))
         self.btn_show_val.clicked.connect(lambda: self.switch_split("val"))
+        self.btn_show_train.setCheckable(True)
+        self.btn_show_val.setCheckable(True)
+        active_btn_style = (
+            "QPushButton:checked {"
+            "  background-color: #1976D2;"
+            "  color: white;"
+            "  border: 1px solid #1565C0;"
+            "  font-weight: bold;"
+            "}"
+        )
+        self.btn_show_train.setStyleSheet(active_btn_style)
+        self.btn_show_val.setStyleSheet(active_btn_style)
         split_switch.addWidget(self.btn_show_train)
         split_switch.addWidget(self.btn_show_val)
         left_layout.addLayout(split_switch)
@@ -132,6 +144,14 @@ class MainWindow(QMainWindow):
         data_root_row.addWidget(self.data_root_edit, 1)
         data_root_row.addWidget(self.pick_data_root_btn)
         split_group_layout.addLayout(data_root_row)
+
+        self.images_path_label = QLineEdit(str(self.data_root / "Images"))
+        self.labels_path_label = QLineEdit(str(self.data_root / "labels"))
+        for label in (self.images_path_label, self.labels_path_label):
+            label.setReadOnly(True)
+            label.setStyleSheet("QLineEdit { background-color: #f5f5f5; color: #666; }")
+            split_group_layout.addWidget(label)
+        self.data_root_edit.textChanged.connect(self._update_sub_paths)
 
         names_row = QHBoxLayout()
         self.names_edit = QLineEdit(str(self.names_path))
@@ -224,6 +244,11 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar(self))
 
+    def _update_sub_paths(self, root_text: str) -> None:
+        root = Path(root_text.strip()) if root_text.strip() else Path(".")
+        self.images_path_label.setText(str(root / "Images"))
+        self.labels_path_label.setText(str(root / "labels"))
+
     def choose_data_root(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择数据根目录", self.data_root_edit.text().strip())
         if folder:
@@ -281,6 +306,8 @@ class MainWindow(QMainWindow):
 
     def switch_split(self, split_name: str) -> None:
         self.current_split = split_name
+        self.btn_show_train.setChecked(split_name == "train")
+        self.btn_show_val.setChecked(split_name == "val")
         self.refresh_list()
 
     def _current_paths(self) -> list[str]:
@@ -293,13 +320,15 @@ class MainWindow(QMainWindow):
         paths = self._current_paths()
         self.filtered_paths = []
 
+        index = 0
         for p in paths:
             name = Path(p).name.lower()
             if current_text and current_text not in name:
                 continue
 
+            index += 1
             self.filtered_paths.append(p)
-            item = QListWidgetItem(Path(p).name)
+            item = QListWidgetItem(f"{index}. {Path(p).name}")
             item.setData(Qt.UserRole, p)
             if not Path(p).exists():
                 item.setForeground(Qt.red)
@@ -335,7 +364,7 @@ class MainWindow(QMainWindow):
         self.pixmap_item = QGraphicsPixmapItem(pixmap)
         self.scene.addItem(self.pixmap_item)
         self.scene.setSceneRect(self.pixmap_item.boundingRect())
-        self.fit_image()
+        QTimer.singleShot(0, self.fit_image)
 
     def show_placeholder(self, text: str) -> None:
         self.scene.clear()
