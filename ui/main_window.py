@@ -86,9 +86,13 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(root)
 
         top_bar = QHBoxLayout()
-        tip_label = QLabel("💡 请先执行数据划分生成 split_files 文件夹，或点击「选择 split_files」加载已有划分")
+        tip_label = QLabel("💡 点击左侧「执行划分」按钮生成 split_files 文件夹")
         tip_label.setStyleSheet("color: #666; padding: 4px 0;")
-        top_bar.addWidget(tip_label)
+        top_bar.addWidget(tip_label, 1)
+        self.path_label = QLabel("当前路径: -")
+        self.meta_label = QLabel("集合: - | 索引: -")
+        top_bar.addWidget(self.path_label, 1)
+        top_bar.addWidget(self.meta_label, 0)
         main_layout.addLayout(top_bar)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -148,6 +152,7 @@ class MainWindow(QMainWindow):
         split_group = QGroupBox("数据划分")
         split_group_layout = QVBoxLayout(split_group)
         self.split_group = split_group
+        split_group.setVisible(False)  # 默认隐藏
 
         data_root_row = QHBoxLayout()
         self.data_root_edit = QLineEdit(self._normalize_path(str(self.data_root)))
@@ -218,7 +223,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(split_group)
 
         split_toggle_row = QHBoxLayout()
-        self.toggle_split_panel_btn = QPushButton("隐藏数据划分")
+        self.toggle_split_panel_btn = QPushButton("显示数据划分")
         self.toggle_split_panel_btn.clicked.connect(self.toggle_split_panel)
         split_toggle_row.addWidget(self.toggle_split_panel_btn)
         left_layout.addLayout(split_toggle_row)
@@ -237,6 +242,7 @@ class MainWindow(QMainWindow):
         self.fit_btn = QPushButton("适配窗口")
         self.one_to_one_btn = QPushButton("1:1")
         self.open_split_dir_btn = QPushButton("选择 split_files")
+        self.open_split_dir_btn.setEnabled(False)  # 暂时禁用，避免路径混乱
         self.fit_btn.clicked.connect(self.fit_image)
         self.one_to_one_btn.clicked.connect(self.reset_zoom)
         self.open_split_dir_btn.clicked.connect(self.choose_split_dir)
@@ -244,14 +250,6 @@ class MainWindow(QMainWindow):
         zoom_bar.addWidget(self.one_to_one_btn)
         zoom_bar.addWidget(self.open_split_dir_btn)
         right_layout.addLayout(zoom_bar)
-
-        # 当前路径和索引信息
-        info_bar = QHBoxLayout()
-        self.path_label = QLabel("当前路径: -")
-        self.meta_label = QLabel("集合: - | 索引: -")
-        info_bar.addWidget(self.path_label, 1)
-        info_bar.addWidget(self.meta_label, 0)
-        right_layout.addLayout(info_bar)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
