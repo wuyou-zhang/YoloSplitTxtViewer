@@ -61,13 +61,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Soldering Split Viewer")
         self.resize(1400, 900)
 
-        self.split_dir = Path(r"E:\Desktop\solderingData\split_files")
+        self.split_dir = Path("E:/Desktop/solderingData/split_files")
         self.store = SplitStore(self.split_dir)
         self.indexer = ImageIndex()
 
         self.current_split = "train"
         self.filtered_paths: list[str] = []
-        self.data_root = Path(r"E:\Desktop\solderingData")
+        self.data_root = Path("E:/Desktop/solderingData")
         self.names_path = self.data_root / "solderingHbbclass.txt"
 
         self._seed_enabled = False
@@ -151,15 +151,15 @@ class MainWindow(QMainWindow):
         self.split_group = split_group
 
         data_root_row = QHBoxLayout()
-        self.data_root_edit = QLineEdit(str(self.data_root))
+        self.data_root_edit = QLineEdit(self._normalize_path(str(self.data_root)))
         self.pick_data_root_btn = QPushButton("数据根目录")
         self.pick_data_root_btn.clicked.connect(self.choose_data_root)
         data_root_row.addWidget(self.data_root_edit, 1)
         data_root_row.addWidget(self.pick_data_root_btn)
         split_group_layout.addLayout(data_root_row)
 
-        self.images_path_label = QLineEdit(str(self.data_root / "Images"))
-        self.labels_path_label = QLineEdit(str(self.data_root / "labels"))
+        self.images_path_label = QLineEdit(self._normalize_path(str(self.data_root / "Images")))
+        self.labels_path_label = QLineEdit(self._normalize_path(str(self.data_root / "labels")))
         for label in (self.images_path_label, self.labels_path_label):
             label.setReadOnly(True)
             label.setStyleSheet("QLineEdit { background-color: #f5f5f5; color: #666; }")
@@ -167,7 +167,7 @@ class MainWindow(QMainWindow):
         self.data_root_edit.textChanged.connect(self._update_sub_paths)
 
         names_row = QHBoxLayout()
-        self.names_edit = QLineEdit(str(self.names_path))
+        self.names_edit = QLineEdit(self._normalize_path(str(self.names_path)))
         self.pick_names_btn = QPushButton("类别文件")
         self.pick_names_btn.clicked.connect(self.choose_names_file)
         names_row.addWidget(self.names_edit, 1)
@@ -272,8 +272,8 @@ class MainWindow(QMainWindow):
 
     def _update_sub_paths(self, root_text: str) -> None:
         root = Path(root_text.strip()) if root_text.strip() else Path(".")
-        self.images_path_label.setText(str(root / "Images"))
-        self.labels_path_label.setText(str(root / "labels"))
+        self.images_path_label.setText(self._normalize_path(str(root / "Images")))
+        self.labels_path_label.setText(self._normalize_path(str(root / "labels")))
 
     # ------------------------------------------------------------------
     # config persistence
@@ -282,8 +282,11 @@ class MainWindow(QMainWindow):
         try:
             if self.CONFIG_PATH.exists():
                 data = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
-                self.data_root = Path(data.get("data_root", str(self.data_root)))
-                self.names_path = Path(data.get("names_path", str(self.names_path)))
+                # 加载时统一路径分隔符
+                data_root = self._normalize_path(data.get("data_root", str(self.data_root)))
+                names_path = self._normalize_path(data.get("names_path", str(self.names_path)))
+                self.data_root = Path(data_root)
+                self.names_path = Path(names_path)
                 self._train_ratio = float(data.get("train_ratio", 0.9))
                 self._val_ratio = float(data.get("val_ratio", 0.1))
                 self._test_ratio = float(data.get("test_ratio", 0.0))
@@ -292,10 +295,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass  # corrupted config → keep defaults
 
+    @staticmethod
+    def _normalize_path(text: str) -> str:
+        """统一路径分隔符为正斜杠 /"""
+        return text.replace("\\", "/") if text else text
+
     def _save_config(self) -> None:
         data = {
-            "data_root": self.data_root_edit.text().strip(),
-            "names_path": self.names_edit.text().strip(),
+            "data_root": self._normalize_path(self.data_root_edit.text().strip()),
+            "names_path": self._normalize_path(self.names_edit.text().strip()),
             "train_ratio": self.train_ratio.value(),
             "val_ratio": self.val_ratio.value(),
             "test_ratio": self.test_ratio.value(),
@@ -319,17 +327,18 @@ class MainWindow(QMainWindow):
     def choose_data_root(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择数据根目录", self.data_root_edit.text().strip())
         if folder:
-            self.data_root_edit.setText(folder)
+            self.data_root_edit.setText(self._normalize_path(folder))
 
     def choose_names_file(self) -> None:
+        initial_dir = self._normalize_path(str(Path(self.names_edit.text()).parent if self.names_edit.text().strip() else self.data_root))
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择类别文件",
-            str(Path(self.names_edit.text()).parent if self.names_edit.text().strip() else self.data_root),
+            initial_dir,
             "Text Files (*.txt);;All Files (*)",
         )
         if file_path:
-            self.names_edit.setText(file_path)
+            self.names_edit.setText(self._normalize_path(file_path))
 
     def toggle_split_panel(self) -> None:
         visible = self.split_group.isVisible()

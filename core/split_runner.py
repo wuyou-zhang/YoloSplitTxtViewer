@@ -58,7 +58,7 @@ def split_dataset(
         rel_path = img_path.relative_to(images_dir)
         label_path = labels_dir / rel_path.with_suffix(".txt")
         if label_path.exists():
-            valid_images.append(str(img_path))
+            valid_images.append(img_path.as_posix())
         else:
             missing_labels += 1
 

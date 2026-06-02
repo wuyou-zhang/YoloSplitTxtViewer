@@ -21,7 +21,7 @@ class SplitStore:
 
     @staticmethod
     def _normalize_path(raw: str) -> str:
-        return str(Path(raw.strip()))
+        return Path(raw.strip()).as_posix()
 
     def _load_file(self, file_path: Path) -> list[str]:
         if not file_path.exists():
