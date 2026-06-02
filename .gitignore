@@ -50,6 +50,9 @@ Thumbs.db
 .env
 .env.*
 
+# User config (auto-generated, user-specific paths)
+split_config.json
+
 # App outputs
 runs/
 outputs/
