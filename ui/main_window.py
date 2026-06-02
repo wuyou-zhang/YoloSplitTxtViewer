@@ -359,6 +359,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "参数错误", "请设置数据根目录")
             return
 
+        # 检查是否已存在划分文件
+        split_dir = Path(data_root) / "split_files"
+        existing_files = []
+        for name in ("train.txt", "val.txt", "test.txt", "data.yaml"):
+            if (split_dir / name).exists():
+                existing_files.append(name)
+
+        if existing_files:
+            files_str = "\n".join(f"  • {f}" for f in existing_files)
+            reply = QMessageBox.question(
+                self,
+                "覆盖确认",
+                f"以下划分文件已存在：\n{files_str}\n\n是否覆盖？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         seed = self.seed_spinbox.value() if self.seed_checkbox.isChecked() else None
         try:
             result = split_dataset(data_root, names_file, (train, val, test), seed=seed)
