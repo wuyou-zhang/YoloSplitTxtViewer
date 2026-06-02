@@ -34,7 +34,47 @@ D:\Anaconda3\envs\yolo\python.exe app.py
 
 `E:\Desktop\solderingData\split_files`
 
-可在界面右下角点击“选择 split_files”切换目录。
+可在界面右下角点击”选择 split_files”切换目录。
+
+## 打包为 exe
+
+### 1. 激活环境
+
+```bash
+conda activate yolo
+```
+
+### 2. 安装 PyInstaller
+
+```bash
+pip install pyinstaller
+```
+
+### 3. 打包
+
+```bash
+cd d:\Project\PycharmPorject\YoloSplitTxtViewer
+pyinstaller -w --clean --add-data “split_config.json;.” app.py
+```
+
+### 4. 复制 Python DLL
+
+```bash
+copy D:\Anaconda3\envs\yolo\python311.dll dist\app\
+```
+
+### 5. 重命名并运行
+
+将 `dist\app` 文件夹重命名为 `YoloSplitTxtViewer`，然后运行 `YoloSplitTxtViewer.exe`。
+
+### 打包参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `-w` 或 `--windowed` | 隐藏控制台窗口 |
+| `--onefile` | 打包成单个 exe（启动较慢） |
+| `--clean` | 清理旧构建文件 |
+| `--add-data “源;目标”` | 打包额外文件 |
 
 ## 路径规则
 
