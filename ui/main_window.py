@@ -86,10 +86,9 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(root)
 
         top_bar = QHBoxLayout()
-        self.path_label = QLabel("当前路径: -")
-        self.meta_label = QLabel("集合: - | 索引: -")
-        top_bar.addWidget(self.path_label, 1)
-        top_bar.addWidget(self.meta_label, 0)
+        tip_label = QLabel("💡 请先执行数据划分生成 split_files 文件夹，或点击「选择 split_files」加载已有划分")
+        tip_label.setStyleSheet("color: #666; padding: 4px 0;")
+        top_bar.addWidget(tip_label)
         main_layout.addLayout(top_bar)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -245,6 +244,14 @@ class MainWindow(QMainWindow):
         zoom_bar.addWidget(self.one_to_one_btn)
         zoom_bar.addWidget(self.open_split_dir_btn)
         right_layout.addLayout(zoom_bar)
+
+        # 当前路径和索引信息
+        info_bar = QHBoxLayout()
+        self.path_label = QLabel("当前路径: -")
+        self.meta_label = QLabel("集合: - | 索引: -")
+        info_bar.addWidget(self.path_label, 1)
+        info_bar.addWidget(self.meta_label, 0)
+        right_layout.addLayout(info_bar)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
