@@ -4,6 +4,8 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.image_index import IMAGE_EXTENSIONS, ImageIndex
+
 
 @dataclass
 class SplitResult:
@@ -23,17 +25,17 @@ def split_dataset(
     data_root: str | Path,
     names_path: str | Path,
     split_ratio: tuple[float, float, float] = (0.8, 0.1, 0.1),
-    extensions: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tiff"),
+    extensions: tuple[str, ...] = IMAGE_EXTENSIONS,
     seed: int | None = None,
 ) -> SplitResult:
     root_path = Path(data_root).resolve()
-    images_dir = root_path / "images"
+    images_dir = ImageIndex.resolve_images_dir(root_path)
     labels_dir = root_path / "labels"
     output_dir = root_path / "split_files"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not images_dir.exists():
-        raise FileNotFoundError(f"找不到 images 文件夹: {images_dir}")
+        raise FileNotFoundError(f"找不到 Images/images 文件夹: {images_dir}")
 
     images: list[Path] = []
     for ext in extensions:

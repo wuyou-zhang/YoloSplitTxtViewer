@@ -71,6 +71,20 @@ class SplitStore:
 
         self.dirty = True
 
+    def add(self, path: str, target: str) -> bool:
+        if path in self.data.train or path in self.data.val:
+            return False
+
+        if target == "train":
+            self.data.train.append(path)
+        elif target == "val":
+            self.data.val.append(path)
+        else:
+            raise ValueError("target must be 'train' or 'val'")
+
+        self.dirty = True
+        return True
+
     @staticmethod
     def _atomic_write(file_path: Path, lines: list[str]) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
