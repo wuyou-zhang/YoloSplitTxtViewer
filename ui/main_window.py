@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self.filtered_paths: list[str] = []
         self.all_items = []
         self.all_items_dirty = True
+        self._data_root_reload_pending = False
         self.pixmap_cache: dict[str, QPixmap] = {}
         self.data_root = Path("E:/Desktop/solderingData")
         self.names_path = self.data_root / "solderingHbbclass.txt"
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
             path_group_layout.addWidget(label)
         self.data_root_edit.textChanged.connect(self._update_sub_paths)
         self.data_root_edit.textChanged.connect(lambda _: self._mark_all_items_dirty())
+        self.data_root_edit.textChanged.connect(lambda _: self._schedule_data_root_reload())
 
         names_row = QHBoxLayout()
         self.names_edit = QLineEdit(self._normalize_path(str(self.names_path)))
@@ -467,6 +469,17 @@ class MainWindow(QMainWindow):
 
     def _mark_all_items_dirty(self) -> None:
         self.all_items_dirty = True
+
+    def _schedule_data_root_reload(self) -> None:
+        if self._data_root_reload_pending:
+            return
+        self._data_root_reload_pending = True
+        QTimer.singleShot(250, self._reload_after_data_root_change)
+
+    def _reload_after_data_root_change(self) -> None:
+        self._data_root_reload_pending = False
+        self.pixmap_cache.clear()
+        self.reload_data()
 
     def _normalize_loaded_split_paths(self) -> bool:
         images_dir = self.indexer.resolve_images_dir(self._data_root_from_edit())
