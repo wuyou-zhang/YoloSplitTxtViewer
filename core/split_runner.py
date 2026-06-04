@@ -54,13 +54,17 @@ def split_dataset(
     if not images:
         raise ValueError("未找到任何图片，请检查路径或后缀名。")
 
+    def format_split_image_path(img_path: Path) -> str:
+        rel_path = img_path.relative_to(images_dir)
+        return str(root_path / "images" / rel_path)
+
     valid_images: list[str] = []
     missing_labels = 0
     for img_path in images:
         rel_path = img_path.relative_to(images_dir)
         label_path = labels_dir / rel_path.with_suffix(".txt")
         if label_path.exists():
-            valid_images.append(img_path.as_posix())
+            valid_images.append(format_split_image_path(img_path))
         else:
             missing_labels += 1
 

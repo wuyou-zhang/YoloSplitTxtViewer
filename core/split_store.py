@@ -23,6 +23,19 @@ class SplitStore:
     def _normalize_path(raw: str) -> str:
         return Path(raw.strip()).as_posix()
 
+    def _format_split_path(self, path: str) -> str:
+        data_root = self.split_dir.parent
+        images_dir = data_root / "Images"
+        if not images_dir.exists():
+            images_dir = data_root / "images"
+
+        path_obj = Path(path)
+        try:
+            rel_path = path_obj.resolve().relative_to(images_dir.resolve())
+            return str(data_root / "images" / rel_path)
+        except (OSError, ValueError):
+            return str(path_obj)
+
     def _load_file(self, file_path: Path) -> list[str]:
         if not file_path.exists():
             return []
@@ -96,6 +109,6 @@ class SplitStore:
         Path(temp_name).replace(file_path)
 
     def save(self) -> None:
-        self._atomic_write(self.train_file, self.data.train)
-        self._atomic_write(self.val_file, self.data.val)
+        self._atomic_write(self.train_file, [self._format_split_path(path) for path in self.data.train])
+        self._atomic_write(self.val_file, [self._format_split_path(path) for path in self.data.val])
         self.dirty = False
