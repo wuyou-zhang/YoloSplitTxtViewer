@@ -179,17 +179,21 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(split_switch)
 
         self.list_widget = QListWidget()
-        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list_widget.currentItemChanged.connect(self.on_selection_changed)
+        self.list_widget.itemSelectionChanged.connect(self.on_item_selection_changed)
         left_layout.addWidget(self.list_widget, 1)
 
         move_bar = QHBoxLayout()
         self.move_to_train_btn = QPushButton("移动到 Train")
         self.move_to_val_btn = QPushButton("移动到 Val")
+        self.remove_from_split_btn = QPushButton("移除出划分")
         self.move_to_train_btn.clicked.connect(lambda: self.move_selected("train"))
         self.move_to_val_btn.clicked.connect(lambda: self.move_selected("val"))
+        self.remove_from_split_btn.clicked.connect(self.remove_selected)
         move_bar.addWidget(self.move_to_train_btn)
         move_bar.addWidget(self.move_to_val_btn)
+        move_bar.addWidget(self.remove_from_split_btn)
         left_layout.addLayout(move_bar)
 
         nav_bar = QHBoxLayout()
@@ -520,20 +524,38 @@ class MainWindow(QMainWindow):
             return None
         return item.data(Qt.UserRole + 1)
 
+    def _selected_items(self) -> list[QListWidgetItem]:
+        return self.list_widget.selectedItems()
+
+    def _selected_paths(self) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        for item in self._selected_items():
+            path = item.data(Qt.UserRole)
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+        return paths
+
     def _update_move_buttons(self) -> None:
-        current_item = self.list_widget.currentItem()
+        selected_items = self._selected_items()
         if self.current_split == "all":
-            can_add = self._item_status(current_item) == "unassigned"
+            statuses = {self._item_status(item) for item in selected_items}
+            can_add = bool(selected_items) and statuses == {"unassigned"}
             self.move_to_train_btn.setEnabled(can_add)
             self.move_to_val_btn.setEnabled(can_add)
+            self.remove_from_split_btn.setEnabled(False)
             return
 
-        has_selection = current_item is not None
+        has_selection = bool(selected_items)
         self.move_to_train_btn.setEnabled(has_selection and self.current_split != "train")
         self.move_to_val_btn.setEnabled(has_selection and self.current_split != "val")
+        self.remove_from_split_btn.setEnabled(has_selection)
 
-    def refresh_list(self) -> None:
+    def refresh_list(self, preferred_path: str | None = None, preferred_row: int | None = None) -> None:
         current_text = self.search_edit.text().strip().lower()
+        previous_row = self.list_widget.currentRow() if preferred_row is None else preferred_row
         self.list_widget.setUpdatesEnabled(False)
         self.list_widget.clear()
 
@@ -578,7 +600,12 @@ class MainWindow(QMainWindow):
             self.list_widget.setUpdatesEnabled(True)
 
         if self.list_widget.count() > 0:
-            self.list_widget.setCurrentRow(0)
+            if preferred_path:
+                self._select_path(preferred_path)
+            elif 0 <= previous_row < self.list_widget.count():
+                self.list_widget.setCurrentRow(previous_row)
+            else:
+                self.list_widget.setCurrentRow(0)
         else:
             self.path_label.setText("当前路径: -")
             self.meta_label.setText(f"集合: {self.current_split} | 索引: 0/0")
@@ -590,12 +617,25 @@ class MainWindow(QMainWindow):
             return
 
         path = current.data(Qt.UserRole)
+        self._update_move_buttons()
+        if len(self._selected_items()) > 1:
+            self.path_label.setText(f"当前路径: {path}")
+            return
+
         index = self.list_widget.currentRow() + 1
         total = self.list_widget.count()
         self.path_label.setText(f"当前路径: {path}")
         self.meta_label.setText(f"集合: {self.current_split} | 索引: {index}/{total}")
-        self._update_move_buttons()
         self.load_image(path)
+
+    def on_item_selection_changed(self) -> None:
+        selected_count = len(self._selected_items())
+        if selected_count > 1:
+            self.meta_label.setText(f"集合: {self.current_split} | 已选择: {selected_count}")
+            current = self.list_widget.currentItem()
+            if current is not None:
+                self.path_label.setText(f"当前路径: {current.data(Qt.UserRole)}")
+        self._update_move_buttons()
 
     def load_image(self, path: str) -> None:
         pixmap = self.pixmap_cache.get(path)
@@ -629,49 +669,84 @@ class MainWindow(QMainWindow):
     def reset_zoom(self) -> None:
         self.view.reset_zoom()
 
-    def _selected_path(self) -> str | None:
-        item = self.list_widget.currentItem()
-        if item is None:
-            return None
-        return item.data(Qt.UserRole)
-
     def move_selected(self, target: str) -> None:
-        path = self._selected_path()
-        if not path:
-            QMessageBox.information(self, "提示", "请先选择一张图片")
+        paths = self._selected_paths()
+        if not paths:
+            QMessageBox.information(self, "提示", "请先选择图片")
             return
+        preferred_row = self.list_widget.currentRow()
 
         if self.current_split == "all":
-            status = self._item_status(self.list_widget.currentItem())
-            if status == "missing_label":
-                QMessageBox.information(self, "不可加入", "这张图片缺少对应标签，不能加入 Train 或 Val")
+            selected_items = self._selected_items()
+            statuses = {self._item_status(item) for item in selected_items}
+            if "missing_label" in statuses:
+                QMessageBox.information(self, "不可加入", "选中的图片里包含缺少标签的项，不能加入 Train 或 Val")
                 return
-            if status != "unassigned":
-                QMessageBox.information(self, "不可加入", "这张图片已经在 Train 或 Val 中")
+            if statuses != {"unassigned"}:
+                QMessageBox.information(self, "不可加入", "只能批量加入未划分的黄色图片")
                 return
 
-            if not self.store.add(path, target):
-                QMessageBox.information(self, "不可加入", "这张图片已经在 Train 或 Val 中")
+            added_count = 0
+            for path in paths:
+                if self.store.add(path, target):
+                    added_count += 1
+
+            if added_count == 0:
+                QMessageBox.information(self, "不可加入", "选中的图片都已经在 Train 或 Val 中")
                 self.refresh_list()
                 return
 
-            if not self._save_store_after_change(f"已加入 {target}: {Path(path).name}"):
+            if not self._save_store_after_change(f"已加入 {target}: {added_count} 张图片"):
                 return
 
             self._mark_all_items_dirty()
-            self.refresh_list()
-            self._select_path(path)
+            preferred_path = None
+            if paths:
+                preferred_path = paths[-1]
+            self.refresh_list(preferred_path=preferred_path, preferred_row=preferred_row)
             return
 
-        self.store.move(path, target)
-        if self.store.dirty and not self._save_store_after_change(f"已移动到 {target}: {Path(path).name}"):
+        moved_count = 0
+        for path in paths:
+            before_train = path in self.store.data.train
+            before_val = path in self.store.data.val
+            self.store.move(path, target)
+            after_train = path in self.store.data.train
+            after_val = path in self.store.data.val
+            if (before_train != after_train) or (before_val != after_val):
+                moved_count += 1
+
+        if self.store.dirty and not self._save_store_after_change(f"已移动到 {target}: {moved_count} 张图片"):
             return
 
-        if target != self.current_split:
-            self.refresh_list()
-        else:
-            self.refresh_list()
-            self._select_path(path)
+        preferred_path = paths[-1] if target == self.current_split and paths else None
+        self.refresh_list(preferred_path=preferred_path, preferred_row=preferred_row)
+
+    def remove_selected(self) -> None:
+        if self.current_split == "all":
+            QMessageBox.information(self, "提示", "All 视图中的图片请使用加入 Train/Val，不支持移除出划分")
+            return
+
+        paths = self._selected_paths()
+        if not paths:
+            QMessageBox.information(self, "提示", "请先选择图片")
+            return
+        preferred_row = self.list_widget.currentRow()
+
+        removed_count = 0
+        for path in paths:
+            if self.store.remove(path):
+                removed_count += 1
+
+        if removed_count == 0:
+            QMessageBox.information(self, "提示", "选中的图片没有可移除的划分记录")
+            return
+
+        if not self._save_store_after_change(f"已移除 {removed_count} 张图片的划分"):
+            return
+
+        self._mark_all_items_dirty()
+        self.refresh_list(preferred_row=preferred_row)
 
     def _select_path(self, path: str) -> None:
         for i in range(self.list_widget.count()):

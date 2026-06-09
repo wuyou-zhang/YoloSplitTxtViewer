@@ -98,6 +98,17 @@ class SplitStore:
         self.dirty = True
         return True
 
+    def remove(self, path: str) -> bool:
+        if path in self.data.train:
+            self.data.train = [item for item in self.data.train if item != path]
+            self.dirty = True
+            return True
+        if path in self.data.val:
+            self.data.val = [item for item in self.data.val if item != path]
+            self.dirty = True
+            return True
+        return False
+
     @staticmethod
     def _atomic_write(file_path: Path, lines: list[str]) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
