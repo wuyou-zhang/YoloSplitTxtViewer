@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPixmap
+from PySide6.QtCore import QPointF, Qt, QSize, QTimer
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QColorDialog,
     QDoubleSpinBox,
     QFileDialog,
     QGraphicsPixmapItem,
+    QGraphicsPolygonItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
     QGroupBox,
@@ -37,24 +41,51 @@ from core.split_store import SplitStore
 
 
 class ZoomableGraphicsView(QGraphicsView):
+    MIN_SCALE = 0.05
+    MAX_SCALE = 20.0
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self._zoom = 1.0
 
     def wheelEvent(self, event) -> None:  # type: ignore[override]
-        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        self._zoom *= factor
+        delta_y = event.angleDelta().y()
+        if delta_y == 0:
+            event.ignore()
+            return
+
+        current_scale = self.transform().m11() or 1.0
+        factor = 1.15 if delta_y > 0 else 1 / 1.15
+        target_scale = current_scale * factor
+        if target_scale < self.MIN_SCALE:
+            factor = self.MIN_SCALE / current_scale
+        elif target_scale > self.MAX_SCALE:
+            factor = self.MAX_SCALE / current_scale
+
+        if math.isclose(factor, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+            event.accept()
+            return
+
         self.scale(factor, factor)
+        event.accept()
 
     def reset_zoom(self) -> None:
         self.resetTransform()
-        self._zoom = 1.0
 
 
 class MainWindow(QMainWindow):
     CONFIG_PATH = Path(__file__).parent.parent / "split_config.json"
+    DEFAULT_CLASS_COLORS = (
+        "#FF3B30",
+        "#FF9500",
+        "#FFCC00",
+        "#34C759",
+        "#00C7BE",
+        "#007AFF",
+        "#5856D6",
+        "#FF2D55",
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,6 +110,8 @@ class MainWindow(QMainWindow):
         self._train_ratio = 0.9
         self._val_ratio = 0.1
         self._test_ratio = 0.0
+        self._show_annotations = True
+        self._class_colors = list(self.DEFAULT_CLASS_COLORS)
         self._load_config()
 
         self._build_ui()
@@ -270,6 +303,27 @@ class MainWindow(QMainWindow):
         self.scene.addItem(self.pixmap_item)
         right_layout.addWidget(self.view, 1)
 
+        annotation_group = QGroupBox("标注显示")
+        annotation_layout = QVBoxLayout(annotation_group)
+        self.show_annotations_checkbox = QCheckBox("显示框")
+        self.show_annotations_checkbox.setChecked(self._show_annotations)
+        self.show_annotations_checkbox.toggled.connect(self._on_annotations_toggled)
+        annotation_layout.addWidget(self.show_annotations_checkbox)
+
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("类别颜色"))
+        self.class_color_buttons: list[QPushButton] = []
+        for index in range(8):
+            button = QPushButton(str(index + 1))
+            button.setFixedWidth(32)
+            button.clicked.connect(lambda _checked=False, idx=index: self.choose_class_color(idx))
+            self.class_color_buttons.append(button)
+            color_row.addWidget(button)
+        color_row.addStretch()
+        annotation_layout.addLayout(color_row)
+        right_layout.addWidget(annotation_group)
+        self._refresh_class_color_buttons()
+
         zoom_bar = QHBoxLayout()
         self.fit_btn = QPushButton("适配窗口")
         self.one_to_one_btn = QPushButton("1:1")
@@ -329,6 +383,9 @@ class MainWindow(QMainWindow):
                 self._test_ratio = float(data.get("test_ratio", 0.0))
                 self._seed_enabled = bool(data.get("seed_enabled", False))
                 self._seed_value = int(data.get("seed_value", 42))
+                self._show_annotations = bool(data.get("show_annotations", True))
+                colors = data.get("class_colors", list(self.DEFAULT_CLASS_COLORS))
+                self._class_colors = self._normalize_class_colors(colors)
         except Exception:
             pass  # corrupted config → keep defaults
 
@@ -346,6 +403,8 @@ class MainWindow(QMainWindow):
             "test_ratio": self.test_ratio.value(),
             "seed_enabled": self.seed_checkbox.isChecked(),
             "seed_value": self.seed_spinbox.value(),
+            "show_annotations": self.show_annotations_checkbox.isChecked() if hasattr(self, "show_annotations_checkbox") else self._show_annotations,
+            "class_colors": self._class_colors,
         }
         self.CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -357,6 +416,51 @@ class MainWindow(QMainWindow):
         self.test_ratio.valueChanged.connect(lambda _: self._save_config())
         self.seed_checkbox.toggled.connect(lambda _: self._save_config())
         self.seed_spinbox.valueChanged.connect(lambda _: self._save_config())
+
+    def _normalize_class_colors(self, colors: list[str] | tuple[str, ...] | object) -> list[str]:
+        valid_colors: list[str] = []
+        if isinstance(colors, (list, tuple)):
+            for value in colors:
+                color = QColor(str(value))
+                if color.isValid():
+                    valid_colors.append(color.name().upper())
+                if len(valid_colors) == 8:
+                    break
+        while len(valid_colors) < 8:
+            valid_colors.append(self.DEFAULT_CLASS_COLORS[len(valid_colors)])
+        return valid_colors
+
+    def _refresh_class_color_buttons(self) -> None:
+        if not hasattr(self, "class_color_buttons"):
+            return
+        for index, button in enumerate(self.class_color_buttons):
+            color = QColor(self._class_colors[index])
+            text_color = "#111111" if color.lightness() > 140 else "#FFFFFF"
+            button.setStyleSheet(
+                "QPushButton {"
+                f"background-color: {color.name()};"
+                f"color: {text_color};"
+                "border: 1px solid #666666;"
+                "border-radius: 4px;"
+                "font-weight: bold;"
+                "}"
+            )
+            button.setToolTip(f"类别颜色 {index + 1}: {color.name().upper()}")
+
+    def _on_annotations_toggled(self, checked: bool) -> None:
+        self._show_annotations = checked
+        self._save_config()
+        self._reload_current_image()
+
+    def choose_class_color(self, index: int) -> None:
+        current = QColor(self._class_colors[index])
+        color = QColorDialog.getColor(current, self, f"选择第 {index + 1} 个类别颜色")
+        if not color.isValid():
+            return
+        self._class_colors[index] = color.name().upper()
+        self._refresh_class_color_buttons()
+        self._save_config()
+        self._reload_current_image()
 
     # ------------------------------------------------------------------
     # actions
@@ -652,8 +756,114 @@ class MainWindow(QMainWindow):
         self.scene.clear()
         self.pixmap_item = QGraphicsPixmapItem(pixmap)
         self.scene.addItem(self.pixmap_item)
+        self._draw_annotations(path, pixmap)
         self.scene.setSceneRect(self.pixmap_item.boundingRect())
         QTimer.singleShot(0, self.fit_image)
+
+    def _reload_current_image(self) -> None:
+        current = self.list_widget.currentItem()
+        if current is None:
+            return
+        path = current.data(Qt.UserRole)
+        if path:
+            self.load_image(path)
+
+    def _draw_annotations(self, image_path: str, pixmap: QPixmap) -> None:
+        if not self.show_annotations_checkbox.isChecked():
+            return
+
+        label_path = self._label_path_for_image(image_path)
+        if label_path is None or not label_path.exists():
+            return
+
+        image_width = pixmap.width()
+        image_height = pixmap.height()
+        if image_width <= 0 or image_height <= 0:
+            return
+
+        try:
+            lines = label_path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            try:
+                lines = label_path.read_text(encoding="gbk").splitlines()
+            except OSError:
+                return
+        except OSError:
+            return
+
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) not in (5, 9):
+                continue
+            try:
+                class_id = int(float(parts[0]))
+            except ValueError:
+                continue
+
+            color = QColor(self._class_colors[class_id % len(self._class_colors)])
+            pen = QPen(color)
+            pen.setWidth(2)
+
+            if len(parts) == 5:
+                rect_item = self._build_hbb_item(parts[1:], image_width, image_height, pen)
+                if rect_item is not None:
+                    self.scene.addItem(rect_item)
+                continue
+
+            polygon_item = self._build_obb_item(parts[1:], image_width, image_height, pen)
+            if polygon_item is not None:
+                self.scene.addItem(polygon_item)
+
+    def _label_path_for_image(self, image_path: str) -> Path | None:
+        image_file = Path(image_path)
+        images_dir = self.indexer.resolve_images_dir(self._data_root_from_edit())
+        try:
+            rel_path = image_file.resolve().relative_to(images_dir.resolve())
+        except (OSError, ValueError):
+            return None
+        return self._data_root_from_edit() / "labels" / rel_path.with_suffix(".txt")
+
+    def _build_hbb_item(
+        self,
+        coords: list[str],
+        image_width: int,
+        image_height: int,
+        pen: QPen,
+    ) -> QGraphicsRectItem | None:
+        try:
+            center_x, center_y, width, height = (float(value) for value in coords)
+        except ValueError:
+            return None
+
+        rect_width = width * image_width
+        rect_height = height * image_height
+        x = (center_x * image_width) - rect_width / 2
+        y = (center_y * image_height) - rect_height / 2
+        item = QGraphicsRectItem(x, y, rect_width, rect_height)
+        item.setPen(pen)
+        return item
+
+    def _build_obb_item(
+        self,
+        coords: list[str],
+        image_width: int,
+        image_height: int,
+        pen: QPen,
+    ) -> QGraphicsPolygonItem | None:
+        if len(coords) != 8:
+            return None
+        try:
+            values = [float(value) for value in coords]
+        except ValueError:
+            return None
+
+        points = [
+            QPointF(values[index] * image_width, values[index + 1] * image_height)
+            for index in range(0, 8, 2)
+        ]
+        item = QGraphicsPolygonItem(QPolygonF(points))
+        item.setPen(pen)
+        return item
 
     def show_placeholder(self, text: str) -> None:
         self.scene.clear()
