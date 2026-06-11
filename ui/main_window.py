@@ -4,7 +4,7 @@ import json
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt, QSize, QTimer
+from PySide6.QtCore import QPointF, Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -43,6 +43,7 @@ from core.split_store import SplitStore
 class ZoomableGraphicsView(QGraphicsView):
     MIN_SCALE = 0.05
     MAX_SCALE = 20.0
+    zoomChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -68,6 +69,7 @@ class ZoomableGraphicsView(QGraphicsView):
             return
 
         self.scale(factor, factor)
+        self.zoomChanged.emit(self.transform().m11() or 1.0)
         event.accept()
 
     def reset_zoom(self) -> None:
@@ -110,8 +112,8 @@ class MainWindow(QMainWindow):
         self._train_ratio = 0.9
         self._val_ratio = 0.1
         self._test_ratio = 0.0
-        self._show_annotations = True
         self._class_colors = list(self.DEFAULT_CLASS_COLORS)
+        self._zoom_ratio = 1.0
         self._load_config()
 
         self._build_ui()
@@ -299,17 +301,13 @@ class MainWindow(QMainWindow):
         self.scene = QGraphicsScene(self)
         self.view = ZoomableGraphicsView(self)
         self.view.setScene(self.scene)
+        self.view.zoomChanged.connect(self._on_view_zoom_changed)
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
         right_layout.addWidget(self.view, 1)
 
         annotation_group = QGroupBox("标注显示")
         annotation_layout = QVBoxLayout(annotation_group)
-        self.show_annotations_checkbox = QCheckBox("显示框")
-        self.show_annotations_checkbox.setChecked(self._show_annotations)
-        self.show_annotations_checkbox.toggled.connect(self._on_annotations_toggled)
-        annotation_layout.addWidget(self.show_annotations_checkbox)
-
         color_row = QHBoxLayout()
         color_row.addWidget(QLabel("类别颜色"))
         self.class_color_buttons: list[QPushButton] = []
@@ -326,14 +324,11 @@ class MainWindow(QMainWindow):
 
         zoom_bar = QHBoxLayout()
         self.fit_btn = QPushButton("适配窗口")
-        self.one_to_one_btn = QPushButton("1:1")
         self.open_split_dir_btn = QPushButton("选择 split_files")
         self.open_split_dir_btn.setEnabled(False)  # 暂时禁用，避免路径混乱
-        self.fit_btn.clicked.connect(self.fit_image)
-        self.one_to_one_btn.clicked.connect(self.reset_zoom)
+        self.fit_btn.clicked.connect(self.capture_fit_zoom)
         self.open_split_dir_btn.clicked.connect(self.choose_split_dir)
         zoom_bar.addWidget(self.fit_btn)
-        zoom_bar.addWidget(self.one_to_one_btn)
         zoom_bar.addWidget(self.open_split_dir_btn)
         right_layout.addLayout(zoom_bar)
 
@@ -383,9 +378,9 @@ class MainWindow(QMainWindow):
                 self._test_ratio = float(data.get("test_ratio", 0.0))
                 self._seed_enabled = bool(data.get("seed_enabled", False))
                 self._seed_value = int(data.get("seed_value", 42))
-                self._show_annotations = bool(data.get("show_annotations", True))
                 colors = data.get("class_colors", list(self.DEFAULT_CLASS_COLORS))
                 self._class_colors = self._normalize_class_colors(colors)
+                self._zoom_ratio = self._normalize_zoom_ratio(data.get("zoom_ratio", 1.0))
         except Exception:
             pass  # corrupted config → keep defaults
 
@@ -403,8 +398,8 @@ class MainWindow(QMainWindow):
             "test_ratio": self.test_ratio.value(),
             "seed_enabled": self.seed_checkbox.isChecked(),
             "seed_value": self.seed_spinbox.value(),
-            "show_annotations": self.show_annotations_checkbox.isChecked() if hasattr(self, "show_annotations_checkbox") else self._show_annotations,
             "class_colors": self._class_colors,
+            "zoom_ratio": self._zoom_ratio,
         }
         self.CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -430,6 +425,13 @@ class MainWindow(QMainWindow):
             valid_colors.append(self.DEFAULT_CLASS_COLORS[len(valid_colors)])
         return valid_colors
 
+    def _normalize_zoom_ratio(self, value: object) -> float:
+        try:
+            zoom_ratio = float(value)
+        except (TypeError, ValueError):
+            zoom_ratio = 1.0
+        return min(max(zoom_ratio, self.view.MIN_SCALE), self.view.MAX_SCALE) if hasattr(self, "view") else min(max(zoom_ratio, 0.05), 20.0)
+
     def _refresh_class_color_buttons(self) -> None:
         if not hasattr(self, "class_color_buttons"):
             return
@@ -447,11 +449,6 @@ class MainWindow(QMainWindow):
             )
             button.setToolTip(f"类别颜色 {index + 1}: {color.name().upper()}")
 
-    def _on_annotations_toggled(self, checked: bool) -> None:
-        self._show_annotations = checked
-        self._save_config()
-        self._reload_current_image()
-
     def choose_class_color(self, index: int) -> None:
         current = QColor(self._class_colors[index])
         color = QColorDialog.getColor(current, self, f"选择第 {index + 1} 个类别颜色")
@@ -461,6 +458,10 @@ class MainWindow(QMainWindow):
         self._refresh_class_color_buttons()
         self._save_config()
         self._reload_current_image()
+
+    def _on_view_zoom_changed(self, zoom_ratio: float) -> None:
+        self._zoom_ratio = self._normalize_zoom_ratio(zoom_ratio)
+        self._save_config()
 
     # ------------------------------------------------------------------
     # actions
@@ -758,7 +759,7 @@ class MainWindow(QMainWindow):
         self.scene.addItem(self.pixmap_item)
         self._draw_annotations(path, pixmap)
         self.scene.setSceneRect(self.pixmap_item.boundingRect())
-        QTimer.singleShot(0, self.fit_image)
+        QTimer.singleShot(0, self.apply_zoom_ratio)
 
     def _reload_current_image(self) -> None:
         current = self.list_widget.currentItem()
@@ -769,9 +770,6 @@ class MainWindow(QMainWindow):
             self.load_image(path)
 
     def _draw_annotations(self, image_path: str, pixmap: QPixmap) -> None:
-        if not self.show_annotations_checkbox.isChecked():
-            return
-
         label_path = self._label_path_for_image(image_path)
         if label_path is None or not label_path.exists():
             return
@@ -878,6 +876,19 @@ class MainWindow(QMainWindow):
 
     def reset_zoom(self) -> None:
         self.view.reset_zoom()
+
+    def apply_zoom_ratio(self) -> None:
+        if self.pixmap_item.pixmap().isNull():
+            return
+        self.view.reset_zoom()
+        self.view.scale(self._zoom_ratio, self._zoom_ratio)
+
+    def capture_fit_zoom(self) -> None:
+        if self.pixmap_item.pixmap().isNull():
+            return
+        self.fit_image()
+        self._zoom_ratio = self._normalize_zoom_ratio(self.view.transform().m11() or 1.0)
+        self._save_config()
 
     def move_selected(self, target: str) -> None:
         paths = self._selected_paths()
