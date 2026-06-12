@@ -38,6 +38,8 @@ D:\Anaconda3\envs\yolo\python.exe app.py
 
 ## 打包为 exe
 
+推荐优先使用项目自带的 `YoloSplitTxtViewer.spec`，这样会自动包含 `split_config.json`，并且产物名称与项目一致。
+
 ### 1. 激活环境
 
 ```bash
@@ -47,34 +49,40 @@ conda activate yolo
 ### 2. 安装 PyInstaller
 
 ```bash
-pip install pyinstaller
+python -m pip install pyinstaller
 ```
 
 ### 3. 打包
 
 ```bash
 cd d:\Project\PycharmPorject\YoloSplitTxtViewer
-pyinstaller -w --clean --add-data “split_config.json;.” app.py
+python -m PyInstaller --clean YoloSplitTxtViewer.spec
 ```
 
-### 4. 复制 Python DLL
+### 4. 运行
+
+打包完成后，运行：
 
 ```bash
-copy D:\Anaconda3\envs\yolo\python311.dll dist\app\
+dist\YoloSplitTxtViewer\YoloSplitTxtViewer.exe
 ```
 
-### 5. 重命名并运行
-
-将 `dist\app` 文件夹重命名为 `YoloSplitTxtViewer`，然后运行 `YoloSplitTxtViewer.exe`。
+一般不需要手动复制 `python311.dll`。
 
 ### 打包参数说明
 
-| 参数 | 说明 |
-|------|------|
-| `-w` 或 `--windowed` | 隐藏控制台窗口 |
-| `--onefile` | 打包成单个 exe（启动较慢） |
-| `--clean` | 清理旧构建文件 |
-| `--add-data “源;目标”` | 打包额外文件 |
+| 参数                       | 说明                       |
+| -------------------------- | -------------------------- |
+| `-w` 或 `--windowed`   | 隐藏控制台窗口             |
+| `--onefile`              | 打包成单个 exe（启动较慢，不推荐当前项目直接使用） |
+| `--clean`                | 清理旧构建文件             |
+| `--add-data "源;目标"` | 打包额外文件               |
+
+如果你不想使用 `.spec` 文件，也可以直接执行：
+
+```bash
+python -m PyInstaller -w --clean --add-data "split_config.json;." --name YoloSplitTxtViewer app.py
+```
 
 ## 路径规则
 
