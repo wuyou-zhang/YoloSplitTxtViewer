@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self._test_ratio = 0.0
         self._class_colors = list(self.DEFAULT_CLASS_COLORS)
         self._zoom_ratio = 1.0
+        self._startup_fit_pending = True
         self._load_config()
 
         self._build_ui()
@@ -918,6 +919,10 @@ class MainWindow(QMainWindow):
 
     def apply_zoom_ratio(self) -> None:
         if self.pixmap_item.pixmap().isNull():
+            return
+        if self._startup_fit_pending:
+            self._startup_fit_pending = False
+            self.capture_fit_zoom()
             return
         self.view.reset_zoom()
         self.view.scale(self._zoom_ratio, self._zoom_ratio)
