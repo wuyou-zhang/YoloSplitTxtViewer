@@ -5,17 +5,19 @@ import math
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt, QSize, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QFontMetricsF, QKeySequence, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QDoubleSpinBox,
     QFileDialog,
+    QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsPolygonItem,
     QGraphicsRectItem,
     QGraphicsScene,
+    QGraphicsSimpleTextItem,
     QGraphicsView,
     QGroupBox,
     QHBoxLayout,
@@ -789,6 +791,7 @@ class MainWindow(QMainWindow):
         except OSError:
             return
 
+        label_font = self._annotation_font(image_width, image_height)
         for line in lines:
             parts = line.strip().split()
             if len(parts) not in (5, 9):
@@ -803,14 +806,48 @@ class MainWindow(QMainWindow):
             pen.setWidth(2)
 
             if len(parts) == 5:
-                rect_item = self._build_hbb_item(parts[1:], image_width, image_height, pen)
-                if rect_item is not None:
-                    self.scene.addItem(rect_item)
+                box_item = self._build_hbb_item(parts[1:], image_width, image_height, pen)
+            else:
+                box_item = self._build_obb_item(parts[1:], image_width, image_height, pen)
+            if box_item is None:
                 continue
 
-            polygon_item = self._build_obb_item(parts[1:], image_width, image_height, pen)
-            if polygon_item is not None:
-                self.scene.addItem(polygon_item)
+            self.scene.addItem(box_item)
+            self._add_class_label(box_item, class_id + 1, color, label_font, image_width, image_height)
+
+    def _annotation_font(self, image_width: int, image_height: int) -> QFont:
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(max(10, min(48, round(max(image_width, image_height) * 0.0075))))
+        return font
+
+    def _add_class_label(
+        self,
+        box_item: QGraphicsItem,
+        class_id: int,
+        color: QColor,
+        font: QFont,
+        image_width: int,
+        image_height: int,
+    ) -> None:
+        text = str(class_id)
+        metrics = QFontMetricsF(font)
+        text_width = metrics.horizontalAdvance(text)
+        text_height = metrics.height()
+
+        anchor = box_item.mapToScene(box_item.boundingRect().topLeft())
+        x = min(max(anchor.x(), 0.0), max(image_width - text_width, 0.0))
+        y = anchor.y() - text_height
+        if y < 0:
+            y = anchor.y()
+        y = min(max(y, 0.0), max(image_height - text_height, 0.0))
+
+        label_item = QGraphicsSimpleTextItem(text)
+        label_item.setFont(font)
+        label_item.setBrush(QBrush(color))
+        label_item.setPos(x, y)
+        label_item.setZValue(1)
+        self.scene.addItem(label_item)
 
     def _label_path_for_image(self, image_path: str) -> Path | None:
         image_file = Path(image_path)
