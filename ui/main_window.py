@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt, QSize, QTimer, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QFontMetricsF, QKeySequence, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QFontMetricsF, QIcon, QKeySequence, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -80,6 +80,7 @@ class ZoomableGraphicsView(QGraphicsView):
 
 class MainWindow(QMainWindow):
     CONFIG_PATH = Path(__file__).parent.parent / "split_config.json"
+    ICON_PATH = Path(__file__).parent.parent / "YoloSplitTxtViewer.ico"
     DEFAULT_CLASS_COLORS = (
         "#FF3B30",
         "#FF9500",
@@ -93,7 +94,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Soldering Split Viewer")
+        self.setWindowTitle("YoloSplitTxtViewer - 数据集划分查看器")
+        self.setWindowIcon(QIcon(str(self.ICON_PATH)))
         self.resize(1400, 900)
 
         self.split_dir = Path("E:/Desktop/solderingData/split_files")

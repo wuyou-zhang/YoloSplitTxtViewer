@@ -56,7 +56,7 @@ python -m pip install pyinstaller
 
 ```bash
 cd d:\Project\PycharmPorject\YoloSplitTxtViewer
-python -m PyInstaller --clean YoloSplitTxtViewer.spec
+python -m PyInstaller --clean --noconfirm YoloSplitTxtViewer.spec
 ```
 
 ### 4. 运行
@@ -81,7 +81,7 @@ dist\YoloSplitTxtViewer\YoloSplitTxtViewer.exe
 如果你不想使用 `.spec` 文件，也可以直接执行：
 
 ```bash
-python -m PyInstaller -w --clean --add-data "split_config.json;." --name YoloSplitTxtViewer app.py
+python -m PyInstaller -w --clean --noconfirm --icon "YoloSplitTxtViewer.ico" --add-data "split_config.json;." --add-data "YoloSplitTxtViewer.ico;." --name YoloSplitTxtViewer app.py
 ```
 
 ## 路径规则
