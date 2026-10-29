@@ -189,9 +189,9 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(path_group)
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("按文件名搜索...")
+        self.search_edit.setPlaceholderText("按文件名定位...")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.textChanged.connect(self.refresh_list)
+        self.search_edit.textChanged.connect(self._on_search_text_changed)
         left_layout.addWidget(self.search_edit)
 
         active_btn_style = (
@@ -229,6 +229,13 @@ class MainWindow(QMainWindow):
 
         self.list_widget = QListWidget()
         self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list_widget.setStyleSheet(
+            "QListWidget { outline: none; }"
+            "QListWidget::item:selected {"
+            "  background-color: #CCE8FF;"
+            "  color: #000000;"
+            "}"
+        )
         self.list_widget.currentItemChanged.connect(self.on_selection_changed)
         self.list_widget.itemSelectionChanged.connect(self.on_item_selection_changed)
         self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -754,13 +761,7 @@ class MainWindow(QMainWindow):
             paths = self._current_paths()
             self.filtered_paths = []
 
-            index = 0
-            for p in paths:
-                name = Path(p).name.lower()
-                if current_text and current_text not in name:
-                    continue
-
-                index += 1
+            for index, p in enumerate(paths, start=1):
                 self.filtered_paths.append(p)
                 item = QListWidgetItem(f"{index}. {Path(p).name}")
                 item.setData(Qt.UserRole, p)
@@ -793,11 +794,50 @@ class MainWindow(QMainWindow):
                 self.list_widget.setCurrentRow(previous_row)
             else:
                 self.list_widget.setCurrentRow(0)
+            if current_text:
+                self._locate_search_match()
         else:
             self.path_label.setText("当前路径: -")
             self.meta_label.setText(f"集合: {self.current_split} | 索引: 0/0")
             self.show_placeholder("无可显示图片")
             self._update_move_buttons()
+
+    def _on_search_text_changed(self, _text: str) -> None:
+        self._locate_search_match()
+
+    def _locate_search_match(self) -> None:
+        text = self.search_edit.text().strip()
+        if not text:
+            self.search_edit.setStyleSheet("")
+            return
+        if self._data_root_from_edit() is None or self.list_widget.count() == 0:
+            return
+
+        needle = text.lower()
+        match_rows = [
+            row
+            for row in range(self.list_widget.count())
+            if needle in Path(self.list_widget.item(row).data(Qt.UserRole)).name.lower()
+        ]
+        if not match_rows:
+            self.search_edit.setStyleSheet(
+                "QLineEdit { border: 1px solid #D32F2F; border-radius: 3px; padding: 1px 3px; }"
+            )
+            self.statusBar().showMessage(
+                f"未找到匹配项（当前集合: {self._split_label(self.current_split)}），可切换到 All 全库查找",
+                5000,
+            )
+            return
+
+        self.search_edit.setStyleSheet("")
+        row = match_rows[0]
+        item = self.list_widget.item(row)
+        self.list_widget.setCurrentRow(row)
+        self.list_widget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+        self.statusBar().showMessage(
+            f"匹配 {len(match_rows)} 项，已定位: {Path(item.data(Qt.UserRole)).name}（第 {row + 1}/{self.list_widget.count()} 项）",
+            5000,
+        )
 
     def on_selection_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         if current is None:
