@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt, QSize, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QFontMetricsF, QIcon, QKeySequence, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QDoubleSpinBox,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -26,6 +29,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -39,7 +43,7 @@ from PySide6.QtWidgets import (
 
 from core.image_index import ImageIndex
 from core.split_runner import split_dataset
-from core.split_store import SplitStore
+from core.split_store import SPLIT_NAMES, SplitStore
 
 
 class ZoomableGraphicsView(QGraphicsView):
@@ -79,7 +83,7 @@ class ZoomableGraphicsView(QGraphicsView):
 
 
 class MainWindow(QMainWindow):
-    CONFIG_PATH = Path(__file__).parent.parent / "split_config.json"
+    CONFIG_PATH = Path(os.environ.get("APPDATA") or Path.home()) / "YoloSplitTxtViewer" / "split_config.json"
     ICON_PATH = Path(__file__).parent.parent / "YoloSplitTxtViewer.ico"
     DEFAULT_CLASS_COLORS = (
         "#FF3B30",
@@ -98,18 +102,19 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(self.ICON_PATH)))
         self.resize(1400, 900)
 
-        self.split_dir = Path("E:/Desktop/solderingData/split_files")
+        self.data_root: Path | None = None
+        self.names_path: Path | None = None
+        self.split_dir = Path()
         self.store = SplitStore(self.split_dir)
         self.indexer = ImageIndex()
 
-        self.current_split = "train"
+        self.current_split = "all"
         self.filtered_paths: list[str] = []
         self.all_items = []
         self.all_items_dirty = True
         self._data_root_reload_pending = False
+        self._last_invalid_signature: tuple[str, tuple[tuple[str, int], ...]] | None = None
         self.pixmap_cache: dict[str, QPixmap] = {}
-        self.data_root = Path("E:/Desktop/solderingData")
-        self.names_path = self.data_root / "solderingHbbclass.txt"
 
         self._seed_enabled = False
         self._seed_value = 42
@@ -153,16 +158,18 @@ class MainWindow(QMainWindow):
         path_group.setVisible(False)
 
         data_root_row = QHBoxLayout()
-        self.data_root_edit = QLineEdit(self._normalize_path(str(self.data_root)))
+        root_text = self._normalize_path(str(self.data_root)) if self.data_root else ""
+        self.data_root_edit = QLineEdit(root_text)
         self.pick_data_root_btn = QPushButton("数据根目录")
         self.pick_data_root_btn.clicked.connect(self.choose_data_root)
         data_root_row.addWidget(self.data_root_edit, 1)
         data_root_row.addWidget(self.pick_data_root_btn)
         path_group_layout.addLayout(data_root_row)
 
-        self.images_path_label = QLineEdit(self._normalize_path(str(self.data_root / "Images")))
-        self.labels_path_label = QLineEdit(self._normalize_path(str(self.data_root / "labels")))
-        self.split_files_path_label = QLineEdit(self._normalize_path(str(self.data_root / "split_files")))
+        sub_paths = (f"{root_text}/Images", f"{root_text}/labels", f"{root_text}/split_files") if root_text else ("", "", "")
+        self.images_path_label = QLineEdit(sub_paths[0])
+        self.labels_path_label = QLineEdit(sub_paths[1])
+        self.split_files_path_label = QLineEdit(sub_paths[2])
         for label in (self.images_path_label, self.labels_path_label, self.split_files_path_label):
             label.setReadOnly(True)
             label.setStyleSheet("QLineEdit { background-color: #f5f5f5; color: #666; }")
@@ -172,7 +179,7 @@ class MainWindow(QMainWindow):
         self.data_root_edit.textChanged.connect(lambda _: self._schedule_data_root_reload())
 
         names_row = QHBoxLayout()
-        self.names_edit = QLineEdit(self._normalize_path(str(self.names_path)))
+        self.names_edit = QLineEdit(self._normalize_path(str(self.names_path)) if self.names_path else "")
         self.pick_names_btn = QPushButton("类别文件")
         self.pick_names_btn.clicked.connect(self.choose_names_file)
         names_row.addWidget(self.names_edit, 1)
@@ -183,19 +190,10 @@ class MainWindow(QMainWindow):
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("按文件名搜索...")
+        self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.refresh_list)
         left_layout.addWidget(self.search_edit)
 
-        split_switch = QHBoxLayout()
-        self.btn_show_train = QPushButton("Train")
-        self.btn_show_val = QPushButton("Val")
-        self.btn_show_all = QPushButton("All")
-        self.btn_show_train.clicked.connect(lambda: self.switch_split("train"))
-        self.btn_show_val.clicked.connect(lambda: self.switch_split("val"))
-        self.btn_show_all.clicked.connect(lambda: self.switch_split("all"))
-        self.btn_show_train.setCheckable(True)
-        self.btn_show_val.setCheckable(True)
-        self.btn_show_all.setCheckable(True)
         active_btn_style = (
             "QPushButton {"
             "  border: 1px solid #BDBDBD;"
@@ -210,31 +208,44 @@ class MainWindow(QMainWindow):
             "  font-weight: bold;"
             "}"
         )
-        self.btn_show_train.setStyleSheet(active_btn_style)
-        self.btn_show_val.setStyleSheet(active_btn_style)
-        self.btn_show_all.setStyleSheet(active_btn_style)
-        split_switch.addWidget(self.btn_show_all)
-        split_switch.addWidget(self.btn_show_train)
-        split_switch.addWidget(self.btn_show_val)
+        self.split_buttons: dict[str, QPushButton] = {}
+
+        def add_split_button(row: QHBoxLayout, name: str, text: str) -> None:
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setStyleSheet(active_btn_style)
+            button.clicked.connect(lambda _checked=False, split=name: self.switch_split(split))
+            self.split_buttons[name] = button
+            row.addWidget(button)
+
+        all_row = QHBoxLayout()
+        add_split_button(all_row, "all", "All")
+        left_layout.addLayout(all_row)
+
+        split_switch = QHBoxLayout()
+        for name in SPLIT_NAMES:
+            add_split_button(split_switch, name, self._split_label(name))
         left_layout.addLayout(split_switch)
 
         self.list_widget = QListWidget()
         self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list_widget.currentItemChanged.connect(self.on_selection_changed)
         self.list_widget.itemSelectionChanged.connect(self.on_item_selection_changed)
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._show_list_context_menu)
         left_layout.addWidget(self.list_widget, 1)
 
-        move_bar = QHBoxLayout()
-        self.move_to_train_btn = QPushButton("移动到 Train")
-        self.move_to_val_btn = QPushButton("移动到 Val")
+        move_grid = QGridLayout()
+        self.move_buttons: dict[str, QPushButton] = {}
+        for index, name in enumerate(SPLIT_NAMES):
+            button = QPushButton(f"移动到 {self._split_label(name)}")
+            button.clicked.connect(lambda _checked=False, target=name: self.move_selected(target))
+            self.move_buttons[name] = button
+            move_grid.addWidget(button, index // 2, index % 2)
         self.remove_from_split_btn = QPushButton("移除出划分")
-        self.move_to_train_btn.clicked.connect(lambda: self.move_selected("train"))
-        self.move_to_val_btn.clicked.connect(lambda: self.move_selected("val"))
         self.remove_from_split_btn.clicked.connect(self.remove_selected)
-        move_bar.addWidget(self.move_to_train_btn)
-        move_bar.addWidget(self.move_to_val_btn)
-        move_bar.addWidget(self.remove_from_split_btn)
-        left_layout.addLayout(move_bar)
+        move_grid.addWidget(self.remove_from_split_btn, 2, 0, 1, 2)
+        left_layout.addLayout(move_grid)
 
         nav_bar = QHBoxLayout()
         self.prev_btn = QPushButton("上一张")
@@ -357,14 +368,24 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar(self))
 
     def _update_sub_paths(self, root_text: str) -> None:
-        root = Path(root_text.strip()) if root_text.strip() else Path(".")
+        text = root_text.strip()
+        if not text:
+            self.images_path_label.setText("")
+            self.labels_path_label.setText("")
+            self.split_files_path_label.setText("")
+            return
+        root = Path(text)
         self.images_path_label.setText(self._normalize_path(str(root / "Images")))
         self.labels_path_label.setText(self._normalize_path(str(root / "labels")))
         self.split_files_path_label.setText(self._normalize_path(str(root / "split_files")))
 
-    def _data_root_from_edit(self) -> Path:
+    def _data_root_from_edit(self) -> Path | None:
         text = self.data_root_edit.text().strip()
-        return Path(text) if text else self.data_root
+        return Path(text) if text else None
+
+    @staticmethod
+    def _split_label(name: str) -> str:
+        return {"train": "Train", "val": "Val", "test": "Test", "unused": "Unused"}.get(name, name.capitalize())
 
     # ------------------------------------------------------------------
     # config persistence
@@ -374,10 +395,10 @@ class MainWindow(QMainWindow):
             if self.CONFIG_PATH.exists():
                 data = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
                 # 加载时统一路径分隔符
-                data_root = self._normalize_path(data.get("data_root", str(self.data_root)))
-                names_path = self._normalize_path(data.get("names_path", str(self.names_path)))
-                self.data_root = Path(data_root)
-                self.names_path = Path(names_path)
+                data_root = self._normalize_path(str(data.get("data_root") or ""))
+                names_path = self._normalize_path(str(data.get("names_path") or ""))
+                self.data_root = Path(data_root) if data_root else None
+                self.names_path = Path(names_path) if names_path else None
                 self._train_ratio = float(data.get("train_ratio", 0.9))
                 self._val_ratio = float(data.get("val_ratio", 0.1))
                 self._test_ratio = float(data.get("test_ratio", 0.0))
@@ -406,6 +427,7 @@ class MainWindow(QMainWindow):
             "class_colors": self._class_colors,
             "zoom_ratio": self._zoom_ratio,
         }
+        self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _connect_config_autosave(self) -> None:
@@ -477,7 +499,13 @@ class MainWindow(QMainWindow):
             self.data_root_edit.setText(self._normalize_path(folder))
 
     def choose_names_file(self) -> None:
-        initial_dir = self._normalize_path(str(Path(self.names_edit.text()).parent if self.names_edit.text().strip() else self.data_root))
+        names_text = self.names_edit.text().strip()
+        if names_text:
+            initial_dir = self._normalize_path(str(Path(names_text).parent))
+        elif self.data_root is not None:
+            initial_dir = self._normalize_path(str(self.data_root))
+        else:
+            initial_dir = ""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择类别文件",
@@ -518,12 +546,17 @@ class MainWindow(QMainWindow):
             if (split_dir / name).exists():
                 existing_files.append(name)
 
+        images_dir = self.indexer.resolve_images_dir(data_root)
+        unused_count = sum(
+            1 for path in self.store.data.unused if self.indexer.is_inside_images(path, images_dir)
+        )
+        scope = f"划分范围：All - Unused（Unused 中的 {unused_count} 张图片不参与划分）"
         if existing_files:
             files_str = "\n".join(f"  • {f}" for f in existing_files)
             reply = QMessageBox.question(
                 self,
                 "覆盖确认",
-                f"以下划分文件已存在：\n{files_str}\n\n是否覆盖？",
+                f"{scope}。\n\n以下文件已存在，重新划分将覆盖其中的清单：\n{files_str}\n\n是否继续？",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -532,7 +565,13 @@ class MainWindow(QMainWindow):
 
         seed = self.seed_spinbox.value() if self.seed_checkbox.isChecked() else None
         try:
-            result = split_dataset(data_root, names_file, (train, val, test), seed=seed)
+            result = split_dataset(
+                data_root,
+                names_file,
+                (train, val, test),
+                seed=seed,
+                exclude_paths=list(self.store.data.unused),
+            )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "划分失败", str(exc))
             self.split_log.append(f"[ERROR] {exc}")
@@ -540,7 +579,8 @@ class MainWindow(QMainWindow):
 
         seed_str = f"seed={seed}" if seed is not None else "seed=random"
         self.split_log.append(
-            f"[OK] Train={result.train_count}, Val={result.val_count}, Test={result.test_count}, "
+            f"[OK] 范围=All-Unused, Train={result.train_count}, Val={result.val_count}, "
+            f"Test={result.test_count}, Unused={result.unused_count}, "
             f"MissingLabel={result.missing_labels}, {seed_str}"
         )
         self.split_log.append(f"[OK] train.txt: {result.train_path}")
@@ -548,37 +588,38 @@ class MainWindow(QMainWindow):
         self.split_log.append(f"[OK] test.txt:  {result.test_path}")
         self.split_log.append(f"[OK] data.yaml: {result.yaml_path}")
 
-        self.split_dir = Path(data_root) / "split_files"
-        self.store = SplitStore(self.split_dir)
         self.reload_data()
         self.statusBar().showMessage("划分完成并已刷新列表", 4000)
 
     def switch_split(self, split_name: str) -> None:
         self.current_split = split_name
-        self.btn_show_train.setChecked(split_name == "train")
-        self.btn_show_val.setChecked(split_name == "val")
-        self.btn_show_all.setChecked(split_name == "all")
-        if split_name == "all":
-            self.move_to_train_btn.setText("加入 Train")
-            self.move_to_val_btn.setText("加入 Val")
-        else:
-            self.move_to_train_btn.setText("移动到 Train")
-            self.move_to_val_btn.setText("移动到 Val")
+        for name, button in self.split_buttons.items():
+            button.setChecked(name == split_name)
+        action = "加入" if split_name == "all" else "移动到"
+        for name, button in self.move_buttons.items():
+            button.setText(f"{action} {self._split_label(name)}")
         self.refresh_list()
 
     def _current_paths(self) -> list[str]:
-        if self.current_split == "train":
-            return self.store.data.train
-        if self.current_split == "val":
-            return self.store.data.val
-        return [item.path for item in self.all_items]
+        if self.current_split == "all":
+            return [item.path for item in self.all_items]
+        return self.store.list_for(self.current_split)
 
     def _refresh_all_items(self) -> None:
         if not self.all_items_dirty:
             return
 
-        split_paths = [*self.store.data.train, *self.store.data.val]
-        self.all_items = self.indexer.build_all(self._data_root_from_edit(), split_paths)
+        data_root = self._data_root_from_edit()
+        if data_root is None:
+            self.all_items = []
+            self.all_items_dirty = False
+            return
+
+        split_map: dict[str, str] = {}
+        for name in SPLIT_NAMES:
+            for path in self.store.list_for(name):
+                split_map[self.indexer.path_key(path)] = name
+        self.all_items = self.indexer.build_all(data_root, split_map)
         self.all_items_dirty = False
 
     def _mark_all_items_dirty(self) -> None:
@@ -595,28 +636,48 @@ class MainWindow(QMainWindow):
         self.pixmap_cache.clear()
         self.reload_data()
 
-    def _normalize_loaded_split_paths(self) -> bool:
-        images_dir = self.indexer.resolve_images_dir(self._data_root_from_edit())
+    def _invalid_split_counts(self) -> dict[str, int]:
+        """统计各清单中不属于当前数据集 images 目录的路径条数。"""
+        data_root = self._data_root_from_edit()
+        if data_root is None:
+            return {}
+        images_dir = self.indexer.resolve_images_dir(data_root)
         if not images_dir.exists():
-            return False
+            return {}
+        return {
+            name: sum(
+                1 for path in self.store.list_for(name) if not self.indexer.is_inside_images(path, images_dir)
+            )
+            for name in SPLIT_NAMES
+        }
 
-        images_root = images_dir.resolve()
+    def _warn_invalid_split_paths(self, invalid_counts: dict[str, int]) -> None:
+        total = sum(invalid_counts.values())
+        if total == 0:
+            self._last_invalid_signature = None
+            return
+        data_root = self._data_root_from_edit()
+        if data_root is None:
+            return
 
-        def normalize(path_text: str) -> str:
-            path = Path(path_text)
-            if not path.exists():
-                return path_text
-            try:
-                rel_path = path.resolve().relative_to(images_root)
-            except ValueError:
-                return path_text
-            return (images_dir / rel_path).as_posix()
+        signature = (self.indexer.path_key(data_root), tuple(sorted(invalid_counts.items())))
+        if signature == self._last_invalid_signature:
+            return
+        self._last_invalid_signature = signature
 
-        old_train = list(self.store.data.train)
-        old_val = list(self.store.data.val)
-        self.store.data.train = [normalize(path) for path in self.store.data.train]
-        self.store.data.val = [normalize(path) for path in self.store.data.val]
-        return self.store.data.train != old_train or self.store.data.val != old_val
+        detail = "\n".join(
+            f"  • {self._split_label(name)}: {count} 条"
+            for name, count in invalid_counts.items()
+            if count
+        )
+        QMessageBox.warning(
+            self,
+            "路径校验提醒",
+            "以下清单中存在不属于当前数据集 images 目录的路径：\n"
+            f"{detail}\n\n"
+            "这些记录保持原样，不会自动修改（列表中已标红）；"
+            "可选中后点击“移除出划分”，或重新执行划分。",
+        )
 
     def _save_store_after_change(self, message: str) -> bool:
         try:
@@ -653,17 +714,29 @@ class MainWindow(QMainWindow):
         if self.current_split == "all":
             statuses = {self._item_status(item) for item in selected_items}
             can_add = bool(selected_items) and statuses == {"unassigned"}
-            self.move_to_train_btn.setEnabled(can_add)
-            self.move_to_val_btn.setEnabled(can_add)
+            for button in self.move_buttons.values():
+                button.setEnabled(can_add)
             self.remove_from_split_btn.setEnabled(False)
             return
 
         has_selection = bool(selected_items)
-        self.move_to_train_btn.setEnabled(has_selection and self.current_split != "train")
-        self.move_to_val_btn.setEnabled(has_selection and self.current_split != "val")
+        for name, button in self.move_buttons.items():
+            button.setEnabled(has_selection and name != self.current_split)
         self.remove_from_split_btn.setEnabled(has_selection)
 
     def refresh_list(self, preferred_path: str | None = None, preferred_row: int | None = None) -> None:
+        data_root = self._data_root_from_edit()
+        if data_root is None:
+            self.all_items = []
+            self.all_items_dirty = False
+            self.filtered_paths = []
+            self.list_widget.clear()
+            self.path_label.setText("当前路径: -")
+            self.meta_label.setText("集合: - | 索引: 0/0")
+            self.show_placeholder("请先选择数据根目录")
+            self._update_move_buttons()
+            return
+
         current_text = self.search_edit.text().strip().lower()
         previous_row = self.list_widget.currentRow() if preferred_row is None else preferred_row
         self.list_widget.setUpdatesEnabled(False)
@@ -672,10 +745,14 @@ class MainWindow(QMainWindow):
         try:
             if self.current_split == "all":
                 self._refresh_all_items()
+                items_by_path = {item.path: item for item in self.all_items}
+                images_dir = None
+            else:
+                items_by_path = {}
+                images_dir = self.indexer.resolve_images_dir(data_root)
 
             paths = self._current_paths()
             self.filtered_paths = []
-            all_status = {item.path: item for item in self.all_items} if self.current_split == "all" else {}
 
             index = 0
             for p in paths:
@@ -689,7 +766,7 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.UserRole, p)
                 tooltip = p
                 if self.current_split == "all":
-                    image_item = all_status[p]
+                    image_item = items_by_path[p]
                     item.setData(Qt.UserRole + 1, image_item.status)
                     if image_item.status == "missing_label":
                         item.setBackground(QColor("#F8D7DA"))
@@ -698,12 +775,12 @@ class MainWindow(QMainWindow):
                     elif image_item.status == "unassigned":
                         item.setBackground(QColor("#FFF3CD"))
                         item.setForeground(QColor("#111111"))
-                        tooltip = f"{p}\n未划分，可加入 Train 或 Val"
+                        tooltip = f"{p}\n未划分（不在 Train/Val/Test/Unused 中）"
                     else:
-                        tooltip = f"{p}\n已划分"
-                elif not Path(p).exists():
-                    item.setForeground(Qt.red)
-                    tooltip = f"{p}\n文件不存在"
+                        tooltip = f"{p}\n已划分: {self._split_label(image_item.split_name)}"
+                elif images_dir is None or not self.indexer.is_inside_images(p, images_dir):
+                    item.setForeground(QColor("#D32F2F"))
+                    tooltip = f"{p}\n路径不属于当前数据集 images 目录或文件不存在，可选中后移除"
                 item.setToolTip(tooltip)
                 self.list_widget.addItem(item)
         finally:
@@ -747,7 +824,42 @@ class MainWindow(QMainWindow):
                 self.path_label.setText(f"当前路径: {current.data(Qt.UserRole)}")
         self._update_move_buttons()
 
+    def _show_list_context_menu(self, pos: QPoint) -> None:
+        item = self.list_widget.itemAt(pos)
+        if item is None:
+            return
+        if not item.isSelected():
+            self.list_widget.clearSelection()
+            self.list_widget.setCurrentItem(item)
+
+        menu = QMenu(self)
+        copy_action = menu.addAction("拷贝文件名")
+        copy_action.triggered.connect(self._copy_selected_names)
+        menu.exec(self.list_widget.viewport().mapToGlobal(pos))
+
+    def _copy_selected_names(self) -> None:
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in self._selected_items():
+            path = item.data(Qt.UserRole)
+            if not path:
+                continue
+            name = Path(path).name
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        if not names:
+            return
+        QApplication.clipboard().setText("\n".join(names))
+        self.statusBar().showMessage(f"已拷贝 {len(names)} 个文件名", 3000)
+
     def load_image(self, path: str) -> None:
+        data_root = self._data_root_from_edit()
+        if data_root is None or not self.indexer.is_inside_images(path, self.indexer.resolve_images_dir(data_root)):
+            self.show_placeholder("路径不属于当前数据集或图片不存在")
+            return
+
         pixmap = self.pixmap_cache.get(path)
         if pixmap is None:
             pixmap = QPixmap(path)
@@ -853,13 +965,16 @@ class MainWindow(QMainWindow):
         self.scene.addItem(label_item)
 
     def _label_path_for_image(self, image_path: str) -> Path | None:
+        data_root = self._data_root_from_edit()
+        if data_root is None:
+            return None
         image_file = Path(image_path)
-        images_dir = self.indexer.resolve_images_dir(self._data_root_from_edit())
+        images_dir = self.indexer.resolve_images_dir(data_root)
         try:
             rel_path = image_file.resolve().relative_to(images_dir.resolve())
         except (OSError, ValueError):
             return None
-        return self._data_root_from_edit() / "labels" / rel_path.with_suffix(".txt")
+        return data_root / "labels" / rel_path.with_suffix(".txt")
 
     def _build_hbb_item(
         self,
@@ -905,6 +1020,9 @@ class MainWindow(QMainWindow):
 
     def show_placeholder(self, text: str) -> None:
         self.scene.clear()
+        # scene.clear() 会销毁旧的 pixmap_item，这里补一个空 item，避免后续访问已删除对象
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
         placeholder = self.scene.addText(text)
         placeholder.setDefaultTextColor(Qt.gray)
         self.scene.setSceneRect(placeholder.boundingRect())
@@ -940,56 +1058,47 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "请先选择图片")
             return
         preferred_row = self.list_widget.currentRow()
+        label = self._split_label(target)
 
         if self.current_split == "all":
             selected_items = self._selected_items()
             statuses = {self._item_status(item) for item in selected_items}
             if "missing_label" in statuses:
-                QMessageBox.information(self, "不可加入", "选中的图片里包含缺少标签的项，不能加入 Train 或 Val")
+                QMessageBox.information(self, "不可加入", "选中的图片里包含缺少标签的项，不能加入划分")
                 return
             if statuses != {"unassigned"}:
                 QMessageBox.information(self, "不可加入", "只能批量加入未划分的黄色图片")
                 return
 
-            added_count = 0
-            for path in paths:
-                if self.store.add(path, target):
-                    added_count += 1
-
+            added_count = self.store.add_many(paths, target)
             if added_count == 0:
-                QMessageBox.information(self, "不可加入", "选中的图片都已经在 Train 或 Val 中")
+                QMessageBox.information(self, "不可加入", "选中的图片都已经在划分中")
                 self.refresh_list()
                 return
 
-            if not self._save_store_after_change(f"已加入 {target}: {added_count} 张图片"):
+            if not self._save_store_after_change(f"已加入 {label}: {added_count} 张图片"):
                 return
 
             self._mark_all_items_dirty()
-            preferred_path = None
-            if paths:
-                preferred_path = paths[-1]
-            self.refresh_list(preferred_path=preferred_path, preferred_row=preferred_row)
+            self.refresh_list(preferred_path=paths[-1], preferred_row=preferred_row)
             return
 
-        moved_count = 0
-        for path in paths:
-            before_train = path in self.store.data.train
-            before_val = path in self.store.data.val
-            self.store.move(path, target)
-            after_train = path in self.store.data.train
-            after_val = path in self.store.data.val
-            if (before_train != after_train) or (before_val != after_val):
-                moved_count += 1
-
-        if self.store.dirty and not self._save_store_after_change(f"已移动到 {target}: {moved_count} 张图片"):
+        moved_count = self.store.move_many(paths, target)
+        if moved_count == 0:
+            self.statusBar().showMessage(f"选中的图片已经在 {label} 中", 3000)
+            self.refresh_list(preferred_row=preferred_row)
             return
 
-        preferred_path = paths[-1] if target == self.current_split and paths else None
+        if not self._save_store_after_change(f"已移动到 {label}: {moved_count} 张图片"):
+            return
+
+        self._mark_all_items_dirty()
+        preferred_path = paths[-1] if target == self.current_split else None
         self.refresh_list(preferred_path=preferred_path, preferred_row=preferred_row)
 
     def remove_selected(self) -> None:
         if self.current_split == "all":
-            QMessageBox.information(self, "提示", "All 视图中的图片请使用加入 Train/Val，不支持移除出划分")
+            QMessageBox.information(self, "提示", "All 视图中的图片请使用加入 Train/Val/Test/Unused，不支持移除出划分")
             return
 
         paths = self._selected_paths()
@@ -998,11 +1107,7 @@ class MainWindow(QMainWindow):
             return
         preferred_row = self.list_widget.currentRow()
 
-        removed_count = 0
-        for path in paths:
-            if self.store.remove(path):
-                removed_count += 1
-
+        removed_count = self.store.remove_many(paths)
         if removed_count == 0:
             QMessageBox.information(self, "提示", "选中的图片没有可移除的划分记录")
             return
@@ -1039,8 +1144,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("保存成功", 3000)
 
     def reload_data(self) -> None:
-        self.data_root = self._data_root_from_edit()
-        self.split_dir = self.data_root / "split_files"
+        data_root = self._data_root_from_edit()
+        self.data_root = data_root
+        if data_root is None:
+            self.split_dir = Path()
+            self.store = SplitStore(self.split_dir)
+            self._mark_all_items_dirty()
+            self.switch_split(self.current_split)
+            self.statusBar().showMessage("请先选择数据根目录", 6000)
+            return
+
+        self.split_dir = data_root / "split_files"
         self.store = SplitStore(self.split_dir)
         self._mark_all_items_dirty()
         try:
@@ -1049,16 +1163,17 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "加载失败", str(exc))
             return
 
-        if self._normalize_loaded_split_paths():
-            try:
-                self.store.save()
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(self, "路径规范化写入失败", str(exc))
-
+        invalid_counts = self._invalid_split_counts()
         self.switch_split(self.current_split)
-        train_count = len(self.store.data.train)
-        val_count = len(self.store.data.val)
-        self.statusBar().showMessage(f"加载完成: train={train_count}, val={val_count}", 4000)
+        counts = ", ".join(
+            f"{self._split_label(name)}={len(self.store.list_for(name))}" for name in SPLIT_NAMES
+        )
+        message = f"加载完成: {counts}"
+        invalid_total = sum(invalid_counts.values())
+        if invalid_total:
+            message += f" | {invalid_total} 条路径不属于当前数据集（已标红，文件保持原样）"
+        self.statusBar().showMessage(message, 8000)
+        self._warn_invalid_split_paths(invalid_counts)
 
     def choose_split_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择 split_files 目录", str(self.split_dir))

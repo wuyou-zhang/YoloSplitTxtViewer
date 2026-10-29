@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from core.image_index import IMAGE_EXTENSIONS, ImageIndex
 
@@ -12,6 +13,7 @@ class SplitResult:
     train_count: int
     val_count: int
     test_count: int
+    unused_count: int
     missing_labels: int
     train_path: Path
     val_path: Path
@@ -27,6 +29,7 @@ def split_dataset(
     split_ratio: tuple[float, float, float] = (0.8, 0.1, 0.1),
     extensions: tuple[str, ...] = IMAGE_EXTENSIONS,
     seed: int | None = None,
+    exclude_paths: Iterable[str] = (),
 ) -> SplitResult:
     root_path = Path(data_root).resolve()
     images_dir = ImageIndex.resolve_images_dir(root_path)
@@ -36,6 +39,8 @@ def split_dataset(
 
     if not images_dir.exists():
         raise FileNotFoundError(f"找不到 Images/images 文件夹: {images_dir}")
+
+    exclude_keys = {ImageIndex.path_key(path) for path in exclude_paths}
 
     images: list[Path] = []
     for ext in extensions:
@@ -56,11 +61,15 @@ def split_dataset(
 
     def format_split_image_path(img_path: Path) -> str:
         rel_path = img_path.relative_to(images_dir)
-        return str(root_path / "images" / rel_path)
+        return (root_path / "images" / rel_path).as_posix()
 
     valid_images: list[str] = []
     missing_labels = 0
+    unused_count = 0
     for img_path in images:
+        if ImageIndex.path_key(img_path) in exclude_keys:
+            unused_count += 1
+            continue
         rel_path = img_path.relative_to(images_dir)
         label_path = labels_dir / rel_path.with_suffix(".txt")
         if label_path.exists():
@@ -69,7 +78,9 @@ def split_dataset(
             missing_labels += 1
 
     if not valid_images:
-        raise ValueError("所有图片都缺失对应标签，无法划分。")
+        raise ValueError(
+            f"没有可划分的图片（已排除 Unused {unused_count} 张、缺失标签 {missing_labels} 张）。"
+        )
 
     if seed is not None:
         random.seed(seed)
@@ -104,7 +115,7 @@ def split_dataset(
 
     names_file = Path(names_path)
     class_names: list[str] = []
-    if names_file.exists():
+    if names_file.is_file():
         class_names = [line.strip() for line in names_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     if not class_names:
         class_names = ["object"]
@@ -128,6 +139,7 @@ names: {class_names}
         train_count=len(train_imgs),
         val_count=len(val_imgs),
         test_count=len(test_imgs),
+        unused_count=unused_count,
         missing_labels=missing_labels,
         train_path=train_path,
         val_path=val_path,

@@ -1,16 +1,18 @@
 # Soldering Split Viewer
 
-一个用于查看和维护 YOLO 训练/验证集图片清单（`train.txt` / `val.txt`）的桌面工具。
+一个用于查看和维护 YOLO 训练/验证/测试集图片清单（`train.txt` / `val.txt` / `test.txt` / `unused.txt`）的桌面工具。
 
 ## 功能
 
-- 加载 `split_files` 目录中的 `train.txt` 和 `val.txt`
-- 左侧列表查看样本，可按文件名搜索
+- 加载 `split_files` 目录中的 `train.txt` / `val.txt` / `test.txt` / `unused.txt`
+- `All` 视图汇总全部图片：黄色为未划分，红色为缺少标签，已划分的项在提示中显示所属集合
+- 左侧列表查看样本，可按文件名搜索；右键菜单可拷贝文件名（多选时按行拷贝多个）
 - 右侧预览图片，支持：滚轮缩放、适配窗口、拖拽平移、1:1
-- 支持将样本在 Train/Val 之间移动
+- 支持在 Train/Val/Test/Unused 之间移动，或移除出划分
+- 打开数据集时逐行校验清单路径：不属于当前数据集 `images` 目录的行标红并弹窗提醒，清单文件保持原样、不自动修改
+- 执行划分时按 `All - Unused` 重新分配 Train/Val/Test，覆盖已有清单前会二次确认
 - 保存时原子写入，避免写文件中断造成损坏
-- 缺失文件在列表中标红，不阻塞程序
-- 关闭时若有未保存修改会提醒
+- 缺失文件或外部路径在列表中标红，不阻塞程序
 
 ## 环境
 
@@ -30,15 +32,15 @@ D:\Anaconda3\envs\yolo\python.exe -m pip install -r requirements.txt
 D:\Anaconda3\envs\yolo\python.exe app.py
 ```
 
-默认读取目录：
+首次启动未设置数据根目录，点击“显示数据路径”后选择数据集即可。界面设置（数据根目录、类别文件、比例、种子、缩放等）保存在：
 
-`E:\Desktop\solderingData\split_files`
+`%APPDATA%\YoloSplitTxtViewer\split_config.json`
 
-可在界面右下角点击”选择 split_files”切换目录。
+程序不内置默认数据路径；重新打包或替换 exe 不会覆盖用户配置。
 
 ## 打包为 exe
 
-推荐优先使用项目自带的 `YoloSplitTxtViewer.spec`，这样会自动包含 `split_config.json`，并且产物名称与项目一致。
+推荐优先使用项目自带的 `YoloSplitTxtViewer.spec`，产物名称与项目一致，且不会打包用户配置。
 
 ### 1. 激活环境
 
@@ -81,12 +83,14 @@ dist\YoloSplitTxtViewer\YoloSplitTxtViewer.exe
 如果你不想使用 `.spec` 文件，也可以直接执行：
 
 ```bash
-python -m PyInstaller -w --clean --noconfirm --icon "YoloSplitTxtViewer.ico" --add-data "split_config.json;." --add-data "YoloSplitTxtViewer.ico;." --name YoloSplitTxtViewer app.py
+python -m PyInstaller -w --clean --noconfirm --icon "YoloSplitTxtViewer.ico" --add-data "YoloSplitTxtViewer.ico;." --name YoloSplitTxtViewer app.py
 ```
 
 ## 路径规则
 
 - 每行一个图片绝对路径
 - 自动去除空行
-- 自动去重（保留首次出现）
-- train/val 之间自动去重，避免同路径同时存在
+- 自动去重（同一路径只保留首次出现，跨 train/val/test/unused 也去重）
+- 数据集被复制或移动后，清单中的旧路径不会被自动改写：不属于当前数据集 `images` 目录的行保持原样并标红，加载时弹窗提醒
+- 标红的行可选中后点击“移除出划分”清理，或直接重新执行划分
+- 数据划分范围固定为 `All - Unused`，Unused 中的图片不参与 Train/Val/Test 分配
